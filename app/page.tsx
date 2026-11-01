@@ -96,50 +96,53 @@ export default function Home() {
         <p className="connection-note">Tasks run in a separate worker. Closing this page does not stop execution.</p>
       </section>
 
-      <section className="task-history" aria-label="Your tasks">
-        <div className="section-heading"><span className="section-label">Your tasks</span></div>
-        {tasks.loading && <p className="quiet-state">Loading task history…</p>}
-        {!tasks.loading && tasks.runs.length === 0 && <p className="quiet-state">No tasks for this user ID.</p>}
-        {tasks.historyError && <p className="error-message">{tasks.historyError}</p>}
-        {tasks.submissionError && <p className="error-message">{tasks.submissionError}</p>}
-        <div className="task-list">
-          {tasks.runs.map((run) => (
-            <button type="button" key={run.id} aria-pressed={run.id === runId} disabled={tasks.submitting} onClick={() => tasks.selectRun(run.id)}>
-              <strong>{run.prompt}</strong>
-              <span>{run.status} · {new Date(run.created_at).toLocaleString()}</span>
-            </button>
-          ))}
-        </div>
-        {tasks.hasMore && <button className="load-more" type="button" disabled={tasks.loadingMore} onClick={() => void tasks.loadMore()}>
-          {tasks.loadingMore ? "Loading…" : "Load more tasks"}
-        </button>}
-      </section>
-
-      <section className="activity" aria-live="polite">
-        <div className="section-heading">
-          <div><span className="section-label">Current run</span>{runId && <code>{runId}</code>}</div>
-          <div className="run-controls">
-            {process.env.NODE_ENV === "development" && running && (
-              <button className="crash-button" onClick={terminateBackend} type="button">Simulate API crash</button>
-            )}
-            <span className={`status status-${statusLabel.toLowerCase()}`}><i aria-hidden="true" />{statusLabel}</span>
-          </div>
-        </div>
-        {events.length === 0 ? <div className="quiet-state">Run activity will appear here.</div> : (
-          <div className="timeline">
-            {events.map((event, index) => (
-              <div className="timeline-row" key={`${event.type}-${event.occurredAt}-${index}`}>
-                <span className={`timeline-dot ${event.type.endsWith("completed") ? "dot-complete" : ""}`} />
-                <strong>{eventLabel(event)}</strong>
-                <time>{new Date(event.occurredAt).toLocaleTimeString()}</time>
-              </div>
+      <div className="run-workspace">
+        <section className="task-history" aria-label="Your tasks">
+          <div className="section-heading"><span className="section-label">Your tasks</span></div>
+          {tasks.loading && <p className="quiet-state">Loading task history…</p>}
+          {!tasks.loading && tasks.runs.length === 0 && <p className="quiet-state">No tasks for this user ID.</p>}
+          {tasks.historyError && <p className="error-message">{tasks.historyError}</p>}
+          {tasks.submissionError && <p className="error-message">{tasks.submissionError}</p>}
+          <div className="task-list">
+            {tasks.runs.map((run) => (
+              <button type="button" key={run.id} aria-pressed={run.id === runId} disabled={tasks.submitting} onClick={() => tasks.selectRun(run.id)}>
+                <strong>{run.prompt}</strong>
+                <span>{run.status} · {new Date(run.created_at).toLocaleString()}</span>
+              </button>
             ))}
           </div>
-        )}
-        {tasks.progressError && <p className="error-message">{tasks.progressError}</p>}
-        {debugMessage && <p className="error-message">{debugMessage}</p>}
-        {completed?.type === "run.completed" && <div className="result">{completed.result}</div>}
-      </section>
+          {tasks.hasMore && <button className="load-more" type="button" disabled={tasks.loadingMore} onClick={() => void tasks.loadMore()}>
+            {tasks.loadingMore ? "Loading…" : "Load more tasks"}
+          </button>}
+        </section>
+
+        <section className="activity" aria-live="polite">
+          <div className="section-heading">
+            <div><span className="section-label">Current run</span>{runId && <code>{runId}</code>}</div>
+            <div className="run-controls">
+              {process.env.NODE_ENV === "development" && running && (
+                <button className="crash-button" onClick={terminateBackend} type="button">Simulate API crash</button>
+              )}
+              <span className={`status status-${statusLabel.toLowerCase()}`}><i aria-hidden="true" />{statusLabel}</span>
+            </div>
+          </div>
+          {events.length === 0 ? <div className="quiet-state">Run activity will appear here.</div> : (
+            <div className="timeline">
+              {events.map((event, index) => (
+                <div className="timeline-row" key={`${event.type}-${event.occurredAt}-${index}`}>
+                  <span className={`timeline-dot ${event.type.endsWith("completed") ? "dot-complete" : ""}`} />
+                  <strong>{eventLabel(event)}</strong>
+                  <time>{new Date(event.occurredAt).toLocaleTimeString()}</time>
+                </div>
+              ))}
+            </div>
+          )}
+          {tasks.progressError && <p className="error-message">{tasks.progressError}</p>}
+          {debugMessage && <p className="error-message">{debugMessage}</p>}
+          {completed?.type === "run.completed" && <div className="result">{completed.result}</div>}
+        </section>
+
+      </div>
 
       <section className="external-system">
         <div className="section-heading">
