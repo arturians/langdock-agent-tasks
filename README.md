@@ -132,6 +132,13 @@ processor's input. A final processor also returns the user-facing `result`.
 Class names are persisted as step types: renaming them requires a migration.
 Migration 2 maps the original step identifiers to processor class names.
 
+`StepExecutionService` coordinates a single step: it loads and starts the step,
+selects and executes its processor outside a transaction, validates the next
+processor, and commits the result through storage before emitting completion.
+`runAgent()` repeats this operation until the final result and delegates failure
+recording to the service. Storage owns SQL and atomic transactions and never
+calls processors.
+
 Execution is still attached to the HTTP request in this intermediate version.
 A request abort marks the run failed; a process crash leaves the last committed
 state on disk. Automatic recovery, worker leases, and idempotent external calls
