@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "next dev",
+    "worker": "node scripts/worker.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

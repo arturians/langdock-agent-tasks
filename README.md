@@ -82,6 +82,12 @@ pnpm install
 pnpm dev
 ```
 
+In a second terminal, from the same project directory, start the worker:
+
+```bash
+pnpm worker
+```
+
 Open [http://localhost:3000](http://localhost:3000). A normal run takes approximately 15 seconds.
 
 ### Client identity
@@ -104,7 +110,8 @@ still a shared development view.
 ### SQLite storage
 
 The SQLite storage layer uses the built-in `node:sqlite` module. The API creates
-a run and its first step before starting the agent through the HTTP stream.
+a run and its first step, then returns `202 { runId }`. A separate worker
+executes tasks. The page polls `GET /api/runs/[id]` with its user ID.
 
 `openDatabase()` in `lib/db.ts` creates `.runtime/agent.db` and applies versioned
 migrations automatically. Connections enable foreign keys, WAL journaling,
@@ -131,6 +138,9 @@ Processors return `output` and `nextProcessor` (a class name such as
 processor's input. A final processor also returns the user-facing `result`.
 Class names are persisted as step types: renaming them requires a migration.
 Migration 2 maps the original step identifiers to processor class names.
+Each processor explicitly preserves its runtime class name with
+`Object.defineProperty` so Next.js minification cannot change the identifiers
+shared by the API and the unbundled worker.
 
 `StepExecutionService` coordinates a single step: it loads and starts the step,
 selects and executes its processor outside a transaction, validates the next
@@ -139,11 +149,20 @@ processor, and commits the result through storage before emitting completion.
 recording to the service. Storage owns SQL and atomic transactions and never
 calls processors.
 
-Execution is still attached to the HTTP request in this intermediate version.
-A request abort marks the run failed; a process crash leaves the last committed
-state on disk. Automatic recovery, worker leases, and idempotent external calls
-will be added in subsequent steps. Steps interrupted before committing may run
-again; external document creation is not yet safe to retry.
+Workers atomically claim queued tasks or running tasks whose lease has expired.
+A lease lasts 15 seconds and is renewed every 5 seconds. Every step start,
+completion, and failure write checks the token and expiry inside its transaction.
+A stale worker cannot commit after losing ownership. SIGINT/SIGTERM interrupts
+execution and releases the lease; a hard crash requires waiting for expiry.
+The next worker skips completed steps and retries an unfinished step. Processor
+errors mark a task failed; automatic retries of application errors are not added.
+
+Both processes must use the same working directory and persistent local disk.
+`AGENT_DB_PATH` can override the database file for both processes. Closing the
+browser or stopping Next.js does not stop the worker. The current page can retry
+progress reads after a temporary API outage, but selecting tasks after a full
+page refresh is deferred to the task-history stage. External document creation
+is not yet safe to retry, and concurrent external JSON writes remain a limitation.
 
 Run storage tests and static checks with:
 
@@ -156,10 +175,15 @@ pnpm lint
 The timing can be changed during development:
 
 ```bash
-AGENT_STEP_DELAY_MS=5000 AGENT_STEP_TRANSITION_DELAY_MS=1000 pnpm dev
+AGENT_STEP_DELAY_MS=5000 AGENT_STEP_TRANSITION_DELAY_MS=1000 pnpm worker
 ```
 
-To explore an interruption, begin a run and refresh the browser, stop the development server with `Ctrl+C`, or use **Simulate process crash** beside an active run. The crash control exits the backend process and is only available in development. Restart the application manually with `pnpm dev`.
+To explore recovery, start a task, stop the worker with `Ctrl+C`, and run
+`pnpm worker` again. For a hard crash, send SIGKILL to the worker process and
+restart it; recovery starts after the old lease expires (up to 15 seconds).
+Stopping the API with `Ctrl+C` or **Simulate API crash** leaves the worker running;
+restart the API with `pnpm dev`. The integration test uses SIGKILL against a real
+worker process and advances its stored lease expiry to avoid a 15-second test wait.
 
 The starter's current structure is summarized in [`docs/STARTER_ARCHITECTURE.md`](./docs/STARTER_ARCHITECTURE.md).
 

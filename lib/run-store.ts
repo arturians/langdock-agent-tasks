@@ -21,15 +21,53 @@ export type StepResult = {
   | { nextStep: null; result: string }
 );
 
+export class LostLeaseError extends Error {
+  constructor() { super("Run lease is no longer owned by this worker."); }
+}
+
+export type ClaimedRun = { id: string; prompt: string; lease_token: string };
+
+function assertLease(db: DatabaseSync, runId: string, token: string | null): void {
+  const owned = db.prepare(`SELECT id FROM runs WHERE id = ? AND
+    ((? IS NULL AND lease_token IS NULL) OR (lease_token = ? AND lease_expires_at > ?))`)
+    .get(runId, token, token, Date.now());
+  if (!owned) throw new LostLeaseError();
+}
+
+/** A single UPDATE selects and claims work atomically across worker processes. */
+export function claimRun(db: DatabaseSync, leaseMs: number): ClaimedRun | undefined {
+  const now = Date.now();
+  return db.prepare(`UPDATE runs SET status = 'running', lease_token = ?, lease_expires_at = ?,
+    started_at = COALESCE(started_at, ?), updated_at = ?
+    WHERE id = (SELECT id FROM runs WHERE status = 'queued'
+      OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+      ORDER BY created_at, id LIMIT 1)
+    RETURNING id, prompt, lease_token`).get(randomUUID(), now + leaseMs, now, now, now) as ClaimedRun | undefined;
+}
+
+export function renewLease(db: DatabaseSync, runId: string, token: string, leaseMs: number): void {
+  const now = Date.now();
+  const updated = db.prepare(`UPDATE runs SET lease_expires_at = ?
+    WHERE id = ? AND status = 'running' AND lease_token = ? AND lease_expires_at > ?`)
+    .run(now + leaseMs, runId, token, now);
+  if (updated.changes !== 1) throw new LostLeaseError();
+}
+
+export function releaseLease(db: DatabaseSync, runId: string, token: string): void {
+  db.prepare(`UPDATE runs SET lease_token = NULL, lease_expires_at = NULL
+    WHERE id = ? AND status = 'running' AND lease_token = ?`).run(runId, token);
+}
+
 export function nextIncompleteStep(db: DatabaseSync, runId: string): StoredStep | undefined {
   return db.prepare(`SELECT * FROM run_steps WHERE run_id = ? AND status != 'completed'
     ORDER BY step_number LIMIT 1`).get(runId) as StoredStep | undefined;
 }
 
-export function startStep(db: DatabaseSync, step: StoredStep): void {
+export function startStep(db: DatabaseSync, step: StoredStep, leaseToken: string | null = null): void {
   const now = Date.now();
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertLease(db, step.run_id, leaseToken);
     const run = db.prepare(`UPDATE runs SET status = 'running', started_at = COALESCE(started_at, ?),
       updated_at = ? WHERE id = ? AND status IN ('queued', 'running')`).run(now, now, step.run_id);
     if (run.changes !== 1) throw new Error("Run is not executable.");
@@ -45,10 +83,11 @@ export function startStep(db: DatabaseSync, step: StoredStep): void {
 }
 
 /** Commit output and continuation together, never leaving a gap between steps. */
-export function completeStep(db: DatabaseSync, step: StoredStep, outcome: StepResult): void {
+export function completeStep(db: DatabaseSync, step: StoredStep, outcome: StepResult, leaseToken: string | null = null): void {
   const now = Date.now();
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertLease(db, step.run_id, leaseToken);
     const updated = db.prepare(`UPDATE run_steps SET status = 'completed', output_json = ?, finished_at = ?
       WHERE id = ? AND run_id = ? AND status = 'running'`).run(JSON.stringify(outcome.output), now, step.id, step.run_id);
     if (updated.changes !== 1) throw new Error("Step is no longer running.");
@@ -63,6 +102,7 @@ export function completeStep(db: DatabaseSync, step: StoredStep, outcome: StepRe
       WHERE id = ? AND status = 'running'`).run(now, outcome.nextStep ? "running" : "completed",
       outcome.nextStep ? null : outcome.result, outcome.nextStep ? null : now, step.run_id);
     if (run.changes !== 1) throw new Error("Run is no longer running.");
+    if (!outcome.nextStep) releaseFinishedLease(db, step.run_id);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -70,14 +110,20 @@ export function completeStep(db: DatabaseSync, step: StoredStep, outcome: StepRe
   }
 }
 
-export function failRun(db: DatabaseSync, runId: string, error: string): void {
+function releaseFinishedLease(db: DatabaseSync, runId: string): void {
+  db.prepare("UPDATE runs SET lease_token = NULL, lease_expires_at = NULL WHERE id = ?").run(runId);
+}
+
+export function failRun(db: DatabaseSync, runId: string, error: string, leaseToken: string | null = null): void {
   const now = Date.now();
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertLease(db, runId, leaseToken);
     db.prepare(`UPDATE run_steps SET status = 'failed', error = ?, finished_at = ?
       WHERE run_id = ? AND status = 'running'`).run(error, now, runId);
     db.prepare(`UPDATE runs SET status = 'failed', error = ?, updated_at = ?, finished_at = ?
       WHERE id = ? AND status IN ('queued', 'running')`).run(error, now, now, runId);
+    releaseFinishedLease(db, runId);
     db.exec("COMMIT");
   } catch (failure) {
     db.exec("ROLLBACK");

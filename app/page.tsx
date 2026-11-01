@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import type { RunProgress } from "@/lib/run-progress";
 import type { AgentEvent, ExternalAction } from "@/lib/types";
 import { USER_ID_HEADER } from "@/lib/user-id";
 import { UserIdentity } from "./user-identity";
@@ -28,12 +29,14 @@ export default function Home() {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [documents, setDocuments] = useState<ExternalAction[]>([]);
   const [running, setRunning] = useState(false);
+  const [runStatus, setRunStatus] = useState("Ready");
   const [requestError, setRequestError] = useState<string | null>(null);
   const abortController = useRef<AbortController | null>(null);
 
   const changeUser = useCallback((id: string) => {
     setUserId(id);
     setEvents([]);
+    setRunStatus("Ready");
     setRequestError(null);
   }, []);
 
@@ -63,6 +66,7 @@ export default function Home() {
     setEvents([]);
     setRequestError(null);
     setRunning(true);
+    setRunStatus("Submitting");
 
     try {
       const response = await fetch("/api/runs", {
@@ -72,34 +76,37 @@ export default function Home() {
         signal: controller.signal,
       });
 
-      if (!response.ok || !response.body) {
-        throw new Error(`The run request failed with status ${response.status}.`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const messages = buffer.split("\n\n");
-        buffer = messages.pop() ?? "";
-        for (const message of messages) {
-          const data = message
-            .split("\n")
-            .find((line) => line.startsWith("data: "))
-            ?.slice(6);
-          if (data) {
-            setEvents((current) => [...current, JSON.parse(data) as AgentEvent]);
+      if (!response.ok) throw new Error(`The run request failed with status ${response.status}.`);
+      const { runId } = await response.json() as { runId: string };
+      setRunStatus("Queued");
+      while (!controller.signal.aborted) {
+        try {
+          const progressResponse = await fetch(`/api/runs/${runId}`, {
+            headers: { [USER_ID_HEADER]: userId }, cache: "no-store", signal: controller.signal,
+          });
+          if (progressResponse.status === 404 || progressResponse.status === 400) {
+            throw new Error("The run is unavailable for this user ID.");
           }
+          if (!progressResponse.ok) {
+            setRequestError("Cannot load progress. Retrying; the task may still be running.");
+          } else {
+            const progress = await progressResponse.json() as RunProgress;
+            setEvents(progress.events);
+            setRunStatus(progress.status[0].toUpperCase() + progress.status.slice(1));
+            setRequestError(null);
+            if (progress.status === "completed" || progress.status === "failed") break;
+          }
+        } catch (error) {
+          if (controller.signal.aborted) break;
+          if (error instanceof Error && error.message === "The run is unavailable for this user ID.") throw error;
+          setRequestError("Connection lost. Retrying; the task may still be running.");
         }
+        await new Promise((resolve) => setTimeout(resolve, 750));
       }
     } catch (error) {
       if (!controller.signal.aborted) {
         setRequestError(error instanceof Error ? error.message : "The run was interrupted.");
+        setRunStatus((current) => current === "Submitting" ? "Request failed" : current);
       }
     } finally {
       setRunning(false);
@@ -114,7 +121,7 @@ export default function Home() {
   }
 
   async function terminateBackend() {
-    setRequestError("Backend termination requested. Restart it with pnpm dev to continue testing.");
+    setRequestError("API termination requested. The worker continues. Restart the API with pnpm dev.");
     try {
       await fetch("/api/debug/crash", { method: "POST" });
     } catch {
@@ -124,8 +131,7 @@ export default function Home() {
 
   const runId = events[0]?.runId;
   const completed = events.find((event) => event.type === "run.completed");
-  const failed = events.find((event) => event.type === "run.failed");
-  const statusLabel = running ? "Running" : completed ? "Completed" : failed ? "Failed" : "Ready";
+  const statusLabel = runStatus;
 
   return (
     <main className="app-shell">
@@ -142,7 +148,7 @@ export default function Home() {
             </button>
           </div>
         </form>
-        <p className="connection-note">This starter keeps the run inside one HTTP request. Refreshing the page loses its progress.</p>
+        <p className="connection-note">Tasks run in a separate worker. Closing this page does not stop execution.</p>
       </section>
 
       <UserIdentity disabled={running} onChange={changeUser} />
@@ -152,7 +158,7 @@ export default function Home() {
           <div><span className="section-label">Current run</span>{runId && <code>{runId}</code>}</div>
           <div className="run-controls">
             {process.env.NODE_ENV === "development" && running && (
-              <button className="crash-button" onClick={terminateBackend} type="button">Simulate process crash</button>
+              <button className="crash-button" onClick={terminateBackend} type="button">Simulate API crash</button>
             )}
             <span className={`status status-${statusLabel.toLowerCase()}`}><i aria-hidden="true" />{statusLabel}</span>
           </div>

@@ -12,8 +12,10 @@ export class StepExecutionService {
   private readonly db: DatabaseSync;
   private readonly registry: StepRegistry;
   private readonly stepDelay: number;
+  private readonly leaseToken: string | null;
 
-  constructor(db: DatabaseSync, registry: StepRegistry, stepDelay = 0) {
+  constructor(db: DatabaseSync, registry: StepRegistry, stepDelay = 0, leaseToken: string | null = null) {
+    this.leaseToken = leaseToken;
     this.db = db;
     this.registry = registry;
     this.stepDelay = stepDelay;
@@ -23,7 +25,7 @@ export class StepExecutionService {
     signal.throwIfAborted();
     const step = nextIncompleteStep(this.db, runId);
     if (!step) throw new Error("Unfinished run has no executable step.");
-    startStep(this.db, step);
+    startStep(this.db, step, this.leaseToken);
     const processor = this.registry.get(step.type);
     const title = processor.title;
     emit({ type: "step.started", runId, step: step.step_number, title, occurredAt: new Date().toISOString() });
@@ -34,7 +36,7 @@ export class StepExecutionService {
     if (outcome.nextProcessor !== null) this.registry.get(outcome.nextProcessor);
     completeStep(this.db, step, outcome.nextProcessor === null
       ? { output: outcome.output, nextStep: null, result: outcome.result }
-      : { output: outcome.output, nextStep: { type: outcome.nextProcessor, input: outcome.output } });
+      : { output: outcome.output, nextStep: { type: outcome.nextProcessor, input: outcome.output } }, this.leaseToken);
     emit({
       type: "step.completed", runId, step: step.step_number, title,
       detail: outcome.detail,
@@ -44,6 +46,6 @@ export class StepExecutionService {
   }
 
   recordFailure(runId: string, error: unknown): void {
-    failRun(this.db, runId, error instanceof Error ? error.message : "Unknown agent error");
+    failRun(this.db, runId, error instanceof Error ? error.message : "Unknown agent error", this.leaseToken);
   }
 }

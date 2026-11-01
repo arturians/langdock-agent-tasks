@@ -5,6 +5,7 @@ import { stepRegistry } from "./agent/processors.ts";
 import type { StepRegistry } from "./agent/step-registry.ts";
 import { StepExecutionService } from "./agent/step-execution-service.ts";
 import type { Emit } from "./agent/step-execution-service.ts";
+import { LostLeaseError } from "./run-store.ts";
 import type { StepDefinition } from "./run-store.ts";
 
 const stepDelay = Number(process.env.AGENT_STEP_DELAY_MS ?? 2_500);
@@ -21,9 +22,10 @@ export async function runAgent(input: {
   signal: AbortSignal;
   emit: Emit;
   registry?: StepRegistry;
+  leaseToken?: string;
 }): Promise<void> {
   const { db, runId, signal, emit } = input;
-  const execution = new StepExecutionService(db, input.registry ?? stepRegistry, stepDelay);
+  const execution = new StepExecutionService(db, input.registry ?? stepRegistry, stepDelay, input.leaseToken);
   emit({ type: "run.started", runId, prompt: input.prompt, occurredAt: new Date().toISOString() });
 
   try {
@@ -36,7 +38,7 @@ export async function runAgent(input: {
       await delay(stepTransitionDelay, undefined, { signal });
     }
   } catch (error) {
-    execution.recordFailure(runId, error);
+    if (!signal.aborted && !(error instanceof LostLeaseError)) execution.recordFailure(runId, error);
     throw error;
   }
 }

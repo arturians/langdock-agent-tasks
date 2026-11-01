@@ -17,8 +17,10 @@ user approval.
    to this service. Storage remains responsible for SQL and transaction boundaries;
    it must not select or execute processors. This coordination previously lived
    in `runAgent()`; storage does not call processors.
-   Extracted to `StepExecutionService`, awaiting review and commit.
+   Committed: `58da1f6`.
 5. Queue worker, leases, and recovery after process interruption.
+   Reviewed and approved for commit. Includes minimal owner-scoped progress
+   polling so the current UI works with asynchronous submission.
 6. User task history and progress restoration in the UI.
 7. Idempotent external document creation.
 8. Recovery scenario tests and final README / DESIGN documentation.

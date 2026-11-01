@@ -9,3 +9,6 @@ export class ProduceResponseProcessor implements StepProcessor {
     return { output: { ...data, result }, nextProcessor: null, result };
   }
 }
+
+// Keep the persisted class name stable across Next.js minification and the worker.
+Object.defineProperty(ProduceResponseProcessor, "name", { value: "ProduceResponseProcessor" });

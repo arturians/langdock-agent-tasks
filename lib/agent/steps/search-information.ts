@@ -10,3 +10,6 @@ export class SearchInformationProcessor implements StepProcessor {
     return { output, nextProcessor: PrepareRecommendationProcessor.name };
   }
 }
+
+// Keep the persisted class name stable across Next.js minification and the worker.
+Object.defineProperty(SearchInformationProcessor, "name", { value: "SearchInformationProcessor" });

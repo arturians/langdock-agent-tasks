@@ -10,3 +10,6 @@ export class UnderstandRequestProcessor implements StepProcessor {
     return { output, nextProcessor: SearchInformationProcessor.name };
   }
 }
+
+// Keep the persisted class name stable across Next.js minification and the worker.
+Object.defineProperty(UnderstandRequestProcessor, "name", { value: "UnderstandRequestProcessor" });

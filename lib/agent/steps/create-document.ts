@@ -22,3 +22,6 @@ export class CreateDocumentProcessor implements StepProcessor {
     };
   }
 }
+
+// Keep the persisted class name stable across Next.js minification and the worker.
+Object.defineProperty(CreateDocumentProcessor, "name", { value: "CreateDocumentProcessor" });
