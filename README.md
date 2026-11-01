@@ -201,6 +201,42 @@ pnpm typecheck
 pnpm lint
 ```
 
+Run the HTTP recovery test against a production build with:
+
+```bash
+pnpm test:integration
+```
+
+It opens a temporary localhost port, starts its own API and worker, uses isolated
+temporary databases, stops and restarts the API, and verifies task completion,
+history, document creation, and user access boundaries. It does not use your
+development databases. The unit and process tests in `pnpm test` also use
+temporary files or in-memory databases.
+
+### Review scenarios
+
+Start `pnpm dev` and `pnpm worker` in separate terminals in this directory.
+For easier observation, run the worker with the slower timings below.
+
+| Scenario | Action | Expected behavior |
+| --- | --- | --- |
+| Browser refresh or close | Submit a task, refresh or reopen the page | The same user and selected task are restored; execution continues |
+| Switch tasks | Submit two tasks and select either history entry | Observation changes; both tasks remain queued or executing |
+| Switch users | Copy the current ID, choose New ID, then enter the old ID | The new ID has separate history; the old ID restores its tasks |
+| API interruption | Use Simulate API crash, or stop `pnpm dev`; restart it | The worker continues; polling resumes when the API returns |
+| Worker interruption | Stop `pnpm worker` with Ctrl+C, then restart it | Unfinished work resumes; committed steps are skipped |
+| Worker hard crash | Send SIGKILL to the worker PID, then restart it | Recovery waits for the old lease to expire, up to 15 seconds |
+| External-call crash window | Run `pnpm test` | A subprocess exits after external commit; recovery reuses the original document |
+| Inspect completion | Select a completed or failed history entry | Saved progress and final result or error remain available |
+
+If a task stays queued, check that the worker is running against the same
+database as the API. Progress is reconstructed from saved step state, so it is
+not a log of every retry. Development Reset clears the shared fake external
+system; use it after tasks finish.
+
+See [DESIGN.md](./DESIGN.md) for the implemented architecture, guarantees,
+limitations, and proposed production changes.
+
 The timing can be changed during development:
 
 ```bash

@@ -24,5 +24,6 @@ user approval.
 6. User task history and progress restoration in the UI.
    Committed: `7df58c7`.
 7. Idempotent external document creation.
-   Implemented, awaiting review and commit.
+   Committed: `5df3e23`.
 8. Recovery scenario tests and final README / DESIGN documentation.
+   Reviewed and approved for commit.
