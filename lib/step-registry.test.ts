@@ -3,9 +3,9 @@ import { test } from "node:test";
 import { StepRegistry } from "./agent/step-registry.ts";
 import type { StepProcessor } from "./agent/step-processor.ts";
 import { stepRegistry } from "./agent/processors.ts";
-import { runAgent } from "./agent.ts";
+import { StepExecutionService } from "./agent/step-execution-service.ts";
 import { openDatabase } from "./db.ts";
-import { createRun } from "./run-store.ts";
+import { claimStep, createRun } from "./run-store.ts";
 
 class CustomProcessor implements StepProcessor {
   readonly title = "Custom action";
@@ -43,10 +43,9 @@ test("executor runs an injected processor without knowing its type or input shap
   try {
     const runId = createRun(db, { userId: "a", prompt: "Test", firstStep: { type: CustomProcessor.name, input: [42] } });
     const events: import("./types.ts").AgentEvent[] = [];
-    await runAgent({
-      db, runId, prompt: "Test", signal: new AbortController().signal,
-      emit: (event) => events.push(event), registry: new StepRegistry([CustomProcessor]),
-    });
+    await new StepExecutionService(db, new StepRegistry([CustomProcessor])).execute(
+      claimStep(db, 15_000)!, new AbortController().signal, (event) => events.push(event),
+    );
     assert.equal(db.prepare("SELECT result FROM runs WHERE id = ?").get(runId)?.result, "Custom result");
     assert.equal(db.prepare("SELECT output_json FROM run_steps WHERE run_id = ?").get(runId)?.output_json, "[42]");
     assert.ok(events.some((event) => event.type === "step.completed" && event.detail === "Custom detail"));

@@ -143,7 +143,7 @@ Step processor classes live in `lib/agent/steps/` and implement `StepProcessor`.
 rejects duplicate and unknown types. The executor selects processors by the
 stored step type and has no action-specific branching. Each processor owns its
 title, input validation, output, and continuation; the registry order does not
-determine execution order. Tests can inject a different registry into `runAgent()`.
+determine execution order. Tests can inject a different registry into `StepExecutionService`.
 Processors return `output` and `nextProcessor` (a class name such as
 `SearchInformationProcessor.name`, or `null` to finish). Output becomes the next
 processor's input. A final processor also returns the user-facing `result`.
@@ -153,20 +153,40 @@ Each processor explicitly preserves its runtime class name with
 `Object.defineProperty` so Next.js minification cannot change the identifiers
 shared by the API and the unbundled worker.
 
-`StepExecutionService` coordinates a single step: it loads and starts the step,
-selects and executes its processor outside a transaction, validates the next
-processor, and commits the result through storage before emitting completion.
-`runAgent()` repeats this operation until the final result and delegates failure
-recording to the service. Storage owns SQL and atomic transactions and never
-calls processors.
+`StepExecutionService` executes a claimed step outside a transaction, validates
+its continuation, and commits the result through storage before emitting completion.
+The worker claims one step, delegates to the service, then returns to the queue.
+Storage owns SQL and atomic transactions and never calls processors.
 
-Workers atomically claim queued tasks or running tasks whose lease has expired.
-A lease lasts 15 seconds and is renewed every 5 seconds. Every step start,
-completion, and failure write checks the token and expiry inside its transaction.
-A stale worker cannot commit after losing ownership. SIGINT/SIGTERM interrupts
-execution and releases the lease; a hard crash requires waiting for expiry.
-The next worker skips completed steps and retries an unfinished step. Processor
-errors mark a task failed; automatic retries of application errors are not added.
+### Step queue and ownership
+
+Leases belong to `run_steps`, not `runs`. Each step stores its `user_id`, with a
+composite foreign key `(run_id, user_id)` referencing the run and its owner.
+Creating a successor copies the owner from the completed step. A unique partial
+index permits only one pending/running step per run, preserving sequential chains.
+
+Workers atomically claim a pending step whose `available_at` has arrived, or
+reclaim a running step with an expired lease, using `UPDATE ... RETURNING` inside
+a short transaction. Claiming increments attempts and updates the parent run's
+status. A lease lasts 15 seconds and renews every 5 seconds. Completing/failing
+a step checks its token and expiry before changing either step or run. Old step
+tokens cannot modify successors or fail their parent run.
+
+Output and successor creation commit together; the next step receives its own
+lease when claimed, potentially by another worker. `AGENT_STEP_TRANSITION_DELAY_MS`
+sets the successor's `available_at` rather than holding a worker slot during a
+transition. SIGINT/SIGTERM returns the unfinished step to pending; SIGKILL requires
+waiting for its lease to expire. Completed steps are not repeated. Processor
+errors fail the current step and run; application-error retries are not added.
+One worker process still executes one step at a time; multiple worker processes
+can process different runs independently. An in-process concurrency pool is not
+part of this change.
+
+Migration 3 backfills step owners, moves any active run lease to its running step,
+preserves inputs/outputs/attempts/idempotency keys, and removes run lease columns.
+Stop the API and all workers before upgrading, then restart both processes; old
+worker code is incompatible with the new schema. Migration runs automatically on
+opening the database. No reset or deletion of existing tasks is needed.
 
 Both processes must use the same working directory and persistent local disk.
 `AGENT_DB_PATH` can override the database file for both processes. Closing the
@@ -176,8 +196,10 @@ task after a full page refresh.
 ### Worker notifications and SSE
 
 After committing state, the worker sends `POST /api/internal/run-updates` with
-`{ runId }`. The API determines ownership from SQLite, reads the committed state,
-and broadcasts snapshots to the matching user's SSE connections. Submission
+`{ userId, runId, stepId }` from the claimed step. The API checks that all three
+identifiers match a stored step, reads the committed state,
+and broadcasts snapshots to the matching user's SSE connections. Changed snapshots
+carry a `notification` object with those three identifiers. Submission
 also notifies history observers. Browser history and progress no longer poll.
 The JSON GET endpoints remain available for inspection.
 

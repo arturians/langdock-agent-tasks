@@ -37,17 +37,26 @@ step cannot be made one local transaction.
 
 1. Submission creates the user if needed, a queued run, and only its first step,
    in one transaction. The API responds with `202 { runId }` after commit.
-2. A worker atomically claims the oldest eligible task using `UPDATE ... RETURNING`.
-   A new random lease token expires after 15 seconds and renews every 5 seconds.
-3. `StepExecutionService` loads the first unfinished step and records its start
-   and attempt count. It finds a processor by the stored class name and executes
-   it outside any task database transaction.
+2. A worker atomically claims one eligible step using `UPDATE ... RETURNING`
+   inside a transaction. Claiming records the attempt/start and updates the run's
+   status. Its random step lease expires after 15 seconds and renews every 5 seconds.
+3. `StepExecutionService` receives that claimed step, finds its processor by class
+   name, and executes it outside any task database transaction.
 4. The processor returns JSON output and the next processor's name, or a final
    result. Output becomes the next step's input. The service validates that the
    continuation is registered.
-5. Storage atomically completes the current step and creates its successor, or
-   completes the run. There is no committed state where a successful nonfinal
-   step lacks its continuation. Completion notifications follow commit.
+5. Storage checks step ownership and atomically completes it and creates its
+   successor, or completes the run. The successor inherits `user_id`, is pending
+   until `available_at`, and will obtain a new lease when claimed by any worker.
+   There is no run-wide execution lock or worker affinity across steps.
+   Completion notifications follow commit.
+
+`run_steps.user_id` is enforced by a composite foreign key to `(runs.id, runs.user_id)`.
+A unique partial index permits only one pending/running step per run, so processors
+remain sequential within a run. Different runs can have independently leased steps.
+Migration 3 backfills ownership and transfers active leases from runs to steps;
+inputs, outputs, attempt counts, and idempotency keys are retained. All API/worker
+processes must be stopped for this schema upgrade and restarted with the new code.
 
 The sample processors still follow five simulated actions. Only the processor
 chooses its successor; neither the queue nor executor assumes a five-step plan.
@@ -57,13 +66,13 @@ also need compatibility handling if changed while old tasks exist.
 
 ## Recovery and guarantees
 
-SIGINT/SIGTERM aborts the worker's current execution and releases its lease.
+SIGINT/SIGTERM aborts the worker's current execution and returns its unfinished step to pending and releases its lease.
 SIGKILL leaves the lease on disk; another worker can claim it after expiry.
 Completed steps are skipped, while unfinished steps may execute again. Task
 acceptance, progress, results, and errors survive reopening the database.
 
-Every step start, completion, and failure transaction checks the worker token and
-lease expiry. An old worker cannot save progress after its lease is lost, even
+The claim/start transaction assigns a step token. Completion and failure
+transactions check that step token and expiry before changing the step or its run. An old worker cannot save progress after its lease is lost, even
 if it resumes later. Leases protect database writes; they cannot forcibly stop
 an external request already in progress.
 
@@ -86,8 +95,10 @@ History is filtered by `user_id`; reading another user's task returns 404.
 A UUID in localStorage identifies the user and can be copied or entered manually.
 The selected task is saved separately per user. Reloading restores observation;
 changing tasks closes old SSE connections without cancelling execution.
-The worker sends best-effort HTTP notifications after state commits; the API
-reads SQLite and pushes user-scoped snapshots over SSE. History has its own
+The worker sends best-effort HTTP notifications containing `userId`, `runId`,
+and `stepId` from its claimed step after state commits. The API validates the
+triple against stored ownership, reads SQLite, and pushes snapshots only to that
+user's SSE subscribers. Changed snapshots include the notification triple. History has its own
 stream; selected-task streams close at a terminal status. Reconnection sends a
 fresh snapshot. Keepalive/reconciliation every 15 seconds covers missed wake-ups
 without browser polling. A notification failure never fails agent execution.
@@ -103,7 +114,8 @@ use it. The external document/reset panel remains a shared development tool.
 - SQLite keeps the prototype self-contained. Multiple workers can coordinate on
   the same local database, but SQLite has one writer; this is not a distributed
   queue across hosts or ephemeral serverless instances.
-- The worker processes one task at a time. Synchronous SQLite calls briefly block
+- Each worker process executes one step at a time. It returns to the shared queue
+  after every step; there is no in-process concurrency pool. Synchronous SQLite calls briefly block
   its event loop; long CPU work can delay heartbeats and cause lease loss.
 - Process interruption is retried; application errors mark tasks failed. There
   is no retry policy, backoff, attempt limit, cancellation API, or manual retry UI.
@@ -138,7 +150,8 @@ necessary. Define execution and timeout policies before expanding concurrency.
 ## Validation
 
 `pnpm test` covers atomic continuation, rollback, access scoping, processor
-registration, lease renewal and stale-write fencing, real worker SIGKILL recovery,
+registration, per-step lease renewal and stale-write fencing, owner-consistent
+migration, handoff between worker connections, real worker SIGKILL recovery,
 parallel external calls, legacy import, and the external-commit/step-commit crash
 window. `pnpm typecheck`, `pnpm lint`, and `pnpm build` check the application.
 The HTTP integration test also checks live worker-to-SSE delivery before the

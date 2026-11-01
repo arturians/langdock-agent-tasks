@@ -29,5 +29,9 @@ user approval.
    Committed: `95afb42`.
 
 9. Replace browser polling with worker notifications and SSE snapshots.
-   Reviewed and approved for commit. HTTP wake-ups after commit, user-scoped
+   Committed: `dced467`. HTTP wake-ups after commit, user-scoped
    streams, reconnect snapshots, and 15-second server-side reconciliation.
+
+10. Move execution leases to steps and carry step ownership through notifications.
+    Reviewed and approved for commit. Owner-consistent schema migration,
+    per-step claims/heartbeats/fencing, and validated userId/runId/stepId SSE updates.

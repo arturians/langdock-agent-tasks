@@ -4,7 +4,7 @@ import { StepExecutionService } from "./agent/step-execution-service.ts";
 import type { ProcessorResult, StepContext, StepProcessor } from "./agent/step-processor.ts";
 import { StepRegistry } from "./agent/step-registry.ts";
 import { openDatabase } from "./db.ts";
-import { createRun } from "./run-store.ts";
+import { claimStep, createRun } from "./run-store.ts";
 
 test("service executes outside a transaction and commits before notifying the client", async () => {
   const db = openDatabase(":memory:");
@@ -20,8 +20,9 @@ test("service executes outside a transaction and commits before notifying the cl
   try {
     const runId = createRun(db, { userId: "a", prompt: "Test", firstStep: { type: FinalProcessor.name, input: { value: 42 } } });
     const service = new StepExecutionService(db, new StepRegistry([FinalProcessor]));
+    const claimed = claimStep(db, 15_000)!;
     let completed = false;
-    await service.executeNext(runId, new AbortController().signal, (event) => {
+    await service.execute(claimed, new AbortController().signal, (event) => {
       if (event.type === "step.completed") {
         completed = true;
         assert.equal(db.prepare("SELECT status FROM runs WHERE id = ?").get(runId)?.status, "completed");
@@ -45,12 +46,13 @@ test("service rejects an unregistered continuation before saving successful outp
   try {
     const runId = createRun(db, { userId: "a", prompt: "Test", firstStep: { type: BrokenProcessor.name, input: null } });
     const service = new StepExecutionService(db, new StepRegistry([BrokenProcessor]));
+    const claimed = claimStep(db, 15_000)!;
     const events: string[] = [];
     await assert.rejects(
-      () => service.executeNext(runId, new AbortController().signal, (event) => events.push(event.type)),
+      () => service.execute(claimed, new AbortController().signal, (event) => events.push(event.type)),
       /Unknown step type: MissingProcessor/,
     );
-    service.recordFailure(runId, new Error("Unknown continuation"));
+    service.recordFailure(claimed, new Error("Unknown continuation"));
     const step = db.prepare("SELECT * FROM run_steps WHERE run_id = ?").get(runId)!;
     assert.equal(step.output_json, null);
     assert.equal(step.status, "failed");

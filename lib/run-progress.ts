@@ -1,8 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { stepRegistry } from "./agent/processors.ts";
 import type { AgentEvent, RunStatus } from "./types.ts";
+import type { StepNotification } from "./run-notifications.ts";
 
-export type RunProgress = { status: RunStatus; events: AgentEvent[] };
+export type RunProgress = { status: RunStatus; events: AgentEvent[]; notification?: StepNotification };
 
 /** A read transaction gives the observer a consistent snapshot of run and steps. */
 export function readUserProgress(db: DatabaseSync, userId: string, runId: string): RunProgress | null {

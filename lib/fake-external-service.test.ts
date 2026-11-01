@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { FakeExternalService } from "./fake-external-service.ts";
 import { openDatabase } from "./db.ts";
-import { claimRun, createRun, nextIncompleteStep, startStep } from "./run-store.ts";
+import { claimStep, createRun } from "./run-store.ts";
 
 const input = { runId: "run", title: "Title", content: "Content", idempotencyKey: "stable-key" };
 const moduleUrl = (file: string) => pathToFileURL(path.resolve(file)).href;
@@ -78,9 +78,7 @@ test("crash after external commit but before step commit reuses the document on 
       userId: "a", prompt: "Recovery",
       firstStep: { type: "CreateDocumentProcessor", input: { prompt: "Recovery", recommendation: "Saved recommendation" } },
     });
-    const claimed = claimRun(db, 15_000)!;
-    const step = nextIncompleteStep(db, runId)!;
-    startStep(db, step, claimed.lease_token);
+    const step = claimStep(db, 15_000)!;
     const env = { ...process.env, FAKE_EXTERNAL_DB_PATH: externalFilename, AGENT_DB_PATH: agentFilename, AGENT_STEP_DELAY_MS: "1", AGENT_STEP_TRANSITION_DELAY_MS: "1" };
     const crash = spawnSync(process.execPath, ["--input-type=module", "-e", `
       import { CreateDocumentProcessor } from ${JSON.stringify(moduleUrl("lib/agent/steps/create-document.ts"))};
@@ -96,12 +94,17 @@ test("crash after external commit but before step commit reuses the document on 
     let originalId: string;
     try { originalId = before.listDocuments()[0].id; } finally { before.close(); }
     assert.equal(db.prepare("SELECT output_json FROM run_steps WHERE id = ?").get(step.id)?.output_json, null);
-    db.prepare("UPDATE runs SET lease_expires_at = 0 WHERE id = ?").run(runId);
+    db.prepare("UPDATE run_steps SET lease_expires_at = 0 WHERE run_id = ? AND status = 'running'").run(runId);
     const recovery = spawnSync(process.execPath, ["--input-type=module", "-e", `
       import { openDatabase } from ${JSON.stringify(moduleUrl("lib/db.ts"))};
       import { workOnce } from ${JSON.stringify(moduleUrl("lib/worker.ts"))};
       const db = openDatabase();
-      try { await workOnce(db, new AbortController().signal); } finally { db.close(); }
+      try {
+        while (db.prepare("SELECT status FROM runs WHERE id = ?").get(${JSON.stringify(runId)}).status !== "completed") {
+          await workOnce(db, new AbortController().signal);
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+      } finally { db.close(); }
     `], { cwd: directory, env, encoding: "utf8", timeout: 10_000 });
     assert.equal(recovery.status, 0, recovery.stderr);
     assert.equal(db.prepare("SELECT status FROM runs WHERE id = ?").get(runId)?.status, "completed");

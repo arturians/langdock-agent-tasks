@@ -1,4 +1,5 @@
 import { subscribeToRuns } from "./run-notifications.ts";
+import type { StepNotification } from "./run-notifications.ts";
 
 /** Subscribe before reading; snapshots recover missed/coalesced notifications. */
 export function snapshotStream<T>(options: {
@@ -29,7 +30,7 @@ export function snapshotStream<T>(options: {
       };
       const abort = () => stop();
       cleanup = () => stop(true);
-      const send = () => {
+      const send = (notification?: StepNotification) => {
         if (stopped) return;
         try {
           const snapshot = options.read();
@@ -40,7 +41,8 @@ export function snapshotStream<T>(options: {
               stop();
               return;
             }
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            const payload = notification ? JSON.stringify({ ...snapshot, notification }) : data;
+            controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
             previous = data;
           }
           if (options.finished?.(snapshot)) stop();
@@ -48,8 +50,10 @@ export function snapshotStream<T>(options: {
           stop();
         }
       };
-      unsubscribe = subscribeToRuns(options.userId, (runId) => {
-        if (!options.runId || options.runId === runId) send();
+      unsubscribe = subscribeToRuns(options.userId, (runId, stepId) => {
+        if (!options.runId || options.runId === runId) {
+          send(stepId ? { userId: options.userId, runId, stepId } : undefined);
+        }
       });
       options.request.signal.addEventListener("abort", abort, { once: true });
       if (options.request.signal.aborted) { stop(); return; }

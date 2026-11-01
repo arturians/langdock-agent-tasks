@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "./db.ts";
-import { completeStep, createRun, failRun, listUserRuns, nextIncompleteStep, startStep } from "./run-store.ts";
+import { completeStep, createRun, failStep, listUserRuns, claimStep } from "./run-store.ts";
 import { readUserProgress } from "./run-progress.ts";
 import { restoredSelection, selectionKey } from "./run-selection.ts";
 
@@ -32,16 +32,15 @@ test("completed and failed tasks retain inspectable results and error events", (
   try {
     const input = { userId: "a", prompt: "Test", firstStep: { type: "ProduceResponseProcessor", input: { prompt: "Test" } } };
     const completedId = createRun(db, input);
-    const completedStep = nextIncompleteStep(db, completedId)!;
-    startStep(db, completedStep);
+    const completedStep = claimStep(db, 15_000)!;
     completeStep(db, completedStep, { output: { result: "Saved result" }, nextStep: null, result: "Saved result" });
     assert.deepEqual(readUserProgress(db, "a", completedId)?.events.at(-1), {
       type: "run.completed", runId: completedId, result: "Saved result",
       occurredAt: new Date(db.prepare("SELECT finished_at FROM runs WHERE id = ?").get(completedId)!.finished_at as number).toISOString(),
     });
     const failedId = createRun(db, input);
-    startStep(db, nextIncompleteStep(db, failedId)!);
-    failRun(db, failedId, "Saved failure");
+    const failedStep = claimStep(db, 15_000)!;
+    failStep(db, failedStep, "Saved failure");
     const event = readUserProgress(db, "a", failedId)?.events.at(-1);
     assert.ok(event?.type === "run.failed");
     assert.equal(event.error, "Saved failure");

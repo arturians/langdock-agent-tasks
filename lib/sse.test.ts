@@ -23,7 +23,7 @@ test("SSE pushes only owned task updates, closes on terminal state and releases 
   const controller = new AbortController();
   let value = 0;
   let closed = 0;
-  const snapshots = readSnapshots<{ value: number }>(snapshotStream({
+  const snapshots = readSnapshots<{ value: number; notification?: { userId: string; runId: string; stepId: string } }>(snapshotStream({
     request: new Request("http://localhost", { signal: controller.signal }), userId: "a", runId: "run-a",
     read: () => ({ value }), close: () => { closed++; }, finished: snapshot => snapshot.value === 2,
   }));
@@ -31,8 +31,10 @@ test("SSE pushes only owned task updates, closes on terminal state and releases 
   value = 1;
   publishRunUpdate("b", "run-a");
   publishRunUpdate("a", "run-b");
-  publishRunUpdate("a", "run-a");
-  assert.equal((await snapshots.next()).value?.value, 1);
+  publishRunUpdate("a", "run-a", "step-1");
+  const update = (await snapshots.next()).value!;
+  assert.equal(update.value, 1);
+  assert.deepEqual(update.notification, { userId: "a", runId: "run-a", stepId: "step-1" });
   value = 2;
   publishRunUpdate("a", "run-a");
   assert.equal((await snapshots.next()).value?.value, 2);

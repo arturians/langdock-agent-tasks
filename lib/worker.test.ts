@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { openDatabase } from "./db.ts";
-import { claimRun, completeStep, createRun, failRun, LostLeaseError, nextIncompleteStep, renewLease, startStep } from "./run-store.ts";
+import { claimStep, completeStep, createRun, failStep, LostLeaseError, renewLease } from "./run-store.ts";
 import { readUserProgress } from "./run-progress.ts";
 import { workOnce } from "./worker.ts";
 
@@ -20,12 +20,12 @@ test("heartbeat keeps an active task claimed and shutdown releases it for recove
     // Install the rejection handler immediately, before aborting the worker.
     const stopped = assert.rejects(work, /abort/i);
     await delay(450);
-    assert.equal(claimRun(db, 15_000), undefined);
+    assert.equal(claimStep(db, 15_000), undefined);
     controller.abort();
     await stopped;
     assert.equal(db.prepare("SELECT status FROM runs WHERE id = ?").get(id)?.status, "running");
-    assert.equal(db.prepare("SELECT lease_token FROM runs WHERE id = ?").get(id)?.lease_token, null);
-    assert.equal(claimRun(db, 15_000)?.id, id);
+    assert.equal(db.prepare("SELECT lease_token FROM run_steps WHERE run_id = ?").get(id)?.lease_token, null);
+    assert.equal(claimStep(db, 15_000)?.run_id, id);
   } finally { controller.abort(); db.close(); }
 });
 
@@ -33,23 +33,19 @@ test("exclusive claims and expired leases fence every stale write", () => {
   const db = openDatabase(":memory:");
   try {
     const id = createRun(db, { userId: "a", prompt: "Test", firstStep: { type: "first", input: null } });
-    const first = claimRun(db, 15_000)!;
-    assert.equal(first.id, id);
-    assert.equal(claimRun(db, 15_000), undefined);
-    const step = nextIncompleteStep(db, id)!;
-    startStep(db, step, first.lease_token);
-    renewLease(db, id, first.lease_token, 30_000);
-    db.prepare("UPDATE runs SET lease_expires_at = 0 WHERE id = ?").run(id);
-    assert.throws(() => renewLease(db, id, first.lease_token, 30_000), LostLeaseError);
-    const second = claimRun(db, 15_000)!;
+    const first = claimStep(db, 15_000)!;
+    assert.equal(first.run_id, id);
+    assert.equal(claimStep(db, 15_000), undefined);
+    renewLease(db, first, 30_000);
+    db.prepare("UPDATE run_steps SET lease_expires_at = 0 WHERE run_id = ? AND status = 'running'").run(id);
+    assert.throws(() => renewLease(db, first, 30_000), LostLeaseError);
+    const second = claimStep(db, 15_000)!;
     assert.notEqual(first.lease_token, second.lease_token);
-    assert.throws(() => startStep(db, step, first.lease_token), LostLeaseError);
-    assert.throws(() => completeStep(db, step, { output: null, nextStep: null, result: "stale" }, first.lease_token), LostLeaseError);
-    assert.throws(() => failRun(db, id, "stale failure", first.lease_token), LostLeaseError);
-    startStep(db, step, second.lease_token);
-    completeStep(db, step, { output: 42, nextStep: null, result: "done" }, second.lease_token);
-    assert.equal(db.prepare("SELECT lease_token FROM runs WHERE id = ?").get(id)?.lease_token, null);
-    assert.equal(claimRun(db, 15_000), undefined);
+    assert.throws(() => completeStep(db, first, { output: null, nextStep: null, result: "stale" }), LostLeaseError);
+    assert.throws(() => failStep(db, first, "stale failure"), LostLeaseError);
+    completeStep(db, second, { output: 42, nextStep: null, result: "done" });
+    assert.equal(db.prepare("SELECT lease_token FROM run_steps WHERE run_id = ?").get(id)?.lease_token, null);
+    assert.equal(claimStep(db, 15_000), undefined);
   } finally { db.close(); }
 });
 
@@ -78,7 +74,7 @@ test("a new worker resumes after SIGKILL, keeping committed steps and task owner
     const exited = once(worker, "exit");
     worker.kill("SIGKILL");
     await exited;
-    db.prepare("UPDATE runs SET lease_expires_at = 0 WHERE id = ?").run(id);
+    db.prepare("UPDATE run_steps SET lease_expires_at = 0 WHERE run_id = ? AND status = 'running'").run(id);
     worker = launch();
     await waitFor(() => db.prepare("SELECT status FROM runs WHERE id = ?").get(id)?.status === "completed");
     const steps = db.prepare("SELECT * FROM run_steps WHERE run_id = ? ORDER BY step_number").all(id);

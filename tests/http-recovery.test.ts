@@ -74,15 +74,26 @@ test("accepted work survives API restart and remains scoped to its user", { time
     const submitted = await fetch(`${base}/api/runs`, { method: "POST", headers, body: JSON.stringify({ prompt: "Survive API restart" }) });
     assert.equal(submitted.status, 202);
     const { runId } = await submitted.json();
+    const firstStepId = db.prepare("SELECT id FROM run_steps WHERE run_id = ?").get(runId)!.id as string;
     assert.equal((await historyStream.next()).value?.runs[0].id, runId);
     assert.equal(db.prepare("SELECT status FROM runs WHERE id = ?").get(runId)?.status, "queued");
     const progressStream = readSnapshots<RunProgress>(await fetch(`${base}/api/runs/${runId}/events`, {
       headers, signal: AbortSignal.any([streams.signal, AbortSignal.timeout(5000)]),
     }));
     assert.equal((await progressStream.next()).value?.status, "queued");
+    assert.equal((await fetch(`${base}/api/internal/run-updates`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: other, runId, stepId: firstStepId }),
+    })).status, 404);
+    assert.equal((await fetch(`${base}/api/internal/run-updates`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId }),
+    })).status, 400);
     worker = start(["scripts/worker.ts"]);
     // This must arrive before the 15-second reconciliation timer: real worker push.
-    assert.equal((await progressStream.next()).value?.status, "running");
+    const pushed = (await progressStream.next()).value!;
+    assert.equal(pushed.status, "running");
+    assert.deepEqual(pushed.notification, { userId: owner, runId, stepId: firstStepId });
     await progressStream.return(undefined);
     await historyStream.return(undefined);
     await waitFor(() => db.prepare("SELECT status FROM run_steps WHERE run_id = ? AND step_number = 1").get(runId)?.status === "running");

@@ -1,35 +1,41 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { DatabaseSync } from "node:sqlite";
 import { WorkerNotifier } from "./run-notifications.ts";
-import { runAgent } from "./agent.ts";
-import { claimRun, releaseLease, renewLease } from "./run-store.ts";
+import { StepExecutionService } from "./agent/step-execution-service.ts";
+import { stepRegistry } from "./agent/processors.ts";
+import { claimStep, LostLeaseError, releaseLease, renewLease } from "./run-store.ts";
 
-/** One run at a time per process; multiple workers coordinate through SQLite. */
+/** One step per claim; every successor competes in the shared queue. */
 export async function workOnce(db: DatabaseSync, signal: AbortSignal, leaseMs = 15_000): Promise<boolean> {
   signal.throwIfAborted();
-  const run = claimRun(db, leaseMs);
-  if (!run) return false;
+  const step = claimStep(db, leaseMs);
+  if (!step) return false;
   const notifier = new WorkerNotifier();
+  const service = new StepExecutionService(db, stepRegistry,
+    Number(process.env.AGENT_STEP_DELAY_MS ?? 2500), Number(process.env.AGENT_STEP_TRANSITION_DELAY_MS ?? 600));
+  const update = { userId: step.user_id, runId: step.run_id, stepId: step.id };
   const controller = new AbortController();
   const stop = () => controller.abort(signal.reason);
   signal.addEventListener("abort", stop, { once: true });
   const heartbeat = setInterval(() => {
     try {
-      renewLease(db, run.id, run.lease_token, leaseMs);
+      renewLease(db, step, leaseMs);
     } catch (error) {
       controller.abort(error);
     }
   }, Math.max(1, Math.floor(leaseMs / 3)));
   try {
-    await runAgent({
-      db, runId: run.id, prompt: run.prompt, leaseToken: run.lease_token,
-      signal: controller.signal, emit: () => notifier.notify(run.id),
-    });
+    // Claim has already committed the step start before this notification.
+    notifier.notify(update);
+    await service.execute(step, controller.signal, () => notifier.notify(update));
+  } catch (error) {
+    if (!controller.signal.aborted && !(error instanceof LostLeaseError)) service.recordFailure(step, error);
+    throw error;
   } finally {
     clearInterval(heartbeat);
     signal.removeEventListener("abort", stop);
-    releaseLease(db, run.id, run.lease_token);
-    notifier.notify(run.id);
+    releaseLease(db, step);
+    notifier.notify(update);
     await notifier.flush();
   }
   return true;
