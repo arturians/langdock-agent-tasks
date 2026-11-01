@@ -75,7 +75,7 @@ Document how to start the application, run the relevant scenarios, and execute a
 
 ## Getting started
 
-Requirements: Node.js 20 or newer and pnpm.
+Requirements: Node.js 24.x and pnpm 11.19.0.
 
 ```bash
 pnpm install
@@ -83,6 +83,29 @@ pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). A normal run takes approximately 15 seconds.
+
+### Storage foundation
+
+The SQLite storage layer uses the built-in `node:sqlite` module. It is not yet
+connected to the agent or API: the starter still executes runs through an HTTP stream.
+
+`openDatabase()` in `lib/db.ts` creates `.runtime/agent.db` and applies versioned
+migrations automatically. Connections enable foreign keys, WAL journaling,
+`synchronous=FULL`, and a five-second lock wait. `.runtime/` is excluded from Git.
+Timestamps are Unix milliseconds.
+
+The schema contains `users`, `runs`, and `run_steps`. `createRun()` in
+`lib/run-store.ts` atomically creates the user if needed, a queued run, and only
+its first step. Future steps will be generated during execution, rather than
+inserted as a predefined plan. Step input and output are JSON values.
+
+Run storage tests and static checks with:
+
+```bash
+pnpm test
+pnpm typecheck
+pnpm lint
+```
 
 The timing can be changed during development:
 
