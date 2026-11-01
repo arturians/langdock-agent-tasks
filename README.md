@@ -93,8 +93,8 @@ Open [http://localhost:3000](http://localhost:3000). A normal run takes approxim
 ### Client identity
 
 The page generates a UUID and stores it in local storage as `agent-user-id`.
-The User ID controls let you copy it, use a manually entered UUID, or generate
-a new one. Switching IDs clears the current run display; it does not delete
+The compact controls in the top-right corner show your ID (click to copy),
+with Change to enter another UUID and Reset to generate a new one. Switching IDs clears the current run display; it does not delete
 stored tasks. Switching is disabled only while submitting a task. Changes in another
 tab reload the page to keep the identity consistent.
 
@@ -222,7 +222,7 @@ For easier observation, run the worker with the slower timings below.
 | --- | --- | --- |
 | Browser refresh or close | Submit a task, refresh or reopen the page | The same user and selected task are restored; execution continues |
 | Switch tasks | Submit two tasks and select either history entry | Observation changes; both tasks remain queued or executing |
-| Switch users | Copy the current ID, choose New ID, then enter the old ID | The new ID has separate history; the old ID restores its tasks |
+| Switch users | Copy the current ID, choose Reset, then enter the old ID | The new ID has separate history; the old ID restores its tasks |
 | API interruption | Use Simulate API crash, or stop `pnpm dev`; restart it | The worker continues; polling resumes when the API returns |
 | Worker interruption | Stop `pnpm worker` with Ctrl+C, then restart it | Unfinished work resumes; committed steps are skipped |
 | Worker hard crash | Send SIGKILL to the worker PID, then restart it | Recovery waits for the old lease to expire, up to 15 seconds |

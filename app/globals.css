@@ -36,12 +36,21 @@ h1 { font-size: clamp(28px, 5vw, 36px); font-weight: 520; letter-spacing: -.035e
 @keyframes spin { to { transform: rotate(360deg); } }
 .connection-note { color: var(--muted); font-size: 11px; margin: 14px 0 0; }
 
-.user-identity { border-top: 1px solid var(--border); margin-top: 30px; padding-top: 18px; }
-.user-identity label { color: var(--secondary); display: block; font-size: 12px; margin-bottom: 8px; }
-.user-identity input { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: monospace; font-size: 12px; padding: 10px; width: 100%; }
-.identity-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
-.identity-actions button { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12px; padding: 7px 10px; }
-.user-identity p { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.user-identity { position: absolute; top: 20px; right: 24px; max-width: calc(100% - 32px); z-index: 10; }
+.identity-summary { align-items: center; display: flex; gap: 12px; }
+.identity-summary button, .identity-actions button { background: none; border: 0; color: var(--muted); font-size: 11px; padding: 3px 0; }
+.identity-summary button:hover, .identity-actions button:hover { color: var(--text); }
+.identity-summary button:focus-visible, .identity-actions button:focus-visible { outline: 1px solid var(--blue); outline-offset: 4px; }
+.identity-summary .identity-id { min-width: 0; }
+.identity-id code { display: block; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.identity-editor { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.2); margin-top: 8px; padding: 14px; position: absolute; right: 0; width: min(360px, calc(100vw - 32px)); }
+.identity-editor label { color: var(--secondary); display: block; font-size: 11px; margin-bottom: 8px; }
+.identity-editor input { background: var(--canvas); border: 1px solid var(--border-strong); border-radius: 5px; color: var(--text); font-family: monospace; font-size: 11px; padding: 9px; width: 100%; }
+.identity-actions { display: flex; gap: 14px; margin-top: 8px; }
+.identity-editor p, .identity-message { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.identity-editor p { margin: 10px 0 0; }
+.identity-message { margin-top: 4px; max-width: 300px; text-align: right; }
+.identity-message:empty { display: none; }
 
 .task-history { border-top: 1px solid var(--border); margin-top: 32px; padding-top: 20px; }
 .task-list { display: grid; gap: 8px; max-height: 320px; overflow-y: auto; }
@@ -92,6 +101,7 @@ h1 { font-size: clamp(28px, 5vw, 36px); font-weight: 520; letter-spacing: -.035e
 .sr-only { clip: rect(0,0,0,0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
 
 @media (max-width: 620px) {
+  .user-identity { top: 14px; right: 16px; }
   .app-shell { padding: 72px 16px 48px; }
   h1 { margin-bottom: 24px; }
   .connection-note { line-height: 1.5; }

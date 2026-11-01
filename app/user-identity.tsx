@@ -10,6 +10,7 @@ export function UserIdentity({ disabled, onChange }: {
   const [userId, setUserId] = useState("");
   const [draft, setDraft] = useState("");
   const [message, setMessage] = useState("");
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -51,6 +52,7 @@ export function UserIdentity({ disabled, onChange }: {
       setUserId(id);
       setDraft(id);
       setMessage("User ID saved.");
+      setEditing(false);
       onChange(id);
     } catch {
       setMessage("Could not save the user ID. Your current identity has not changed.");
@@ -62,22 +64,40 @@ export function UserIdentity({ disabled, onChange }: {
       await navigator.clipboard.writeText(userId);
       setMessage("User ID copied.");
     } catch {
-      setMessage("Could not copy. Select and copy the ID from the input.");
+      setMessage("Could not copy. Use Change to select and copy the ID.");
     }
   }
 
   return (
     <section className="user-identity" aria-label="User identity">
-      <label htmlFor="user-id">User ID</label>
-      <input id="user-id" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={disabled} spellCheck={false} autoComplete="off" />
-      <div className="identity-actions">
-        <button type="button" disabled={disabled} onClick={() => selectIdentity(draft)}>Use ID</button>
-        <button type="button" disabled={!userId} onClick={copyIdentity}>Copy ID</button>
-        <button type="button" disabled={disabled} onClick={() => selectIdentity(crypto.randomUUID())}>New ID</button>
+      <div className="identity-summary">
+        <button className="identity-id" type="button" disabled={!userId} onClick={copyIdentity} title={`${userId || "Loading user ID"} — click to copy`} aria-label="Copy user ID">
+          <code>{userId || "Loading…"}</code>
+        </button>
+        <button type="button" disabled={disabled} aria-expanded={editing} aria-controls="identity-editor" onClick={() => {
+          setDraft(userId);
+          setMessage("");
+          setEditing((value) => !value);
+        }}>Change</button>
+        <button type="button" disabled={disabled} onClick={() => selectIdentity(crypto.randomUUID())} title="Generate a new ID; previous tasks remain under the old ID">Reset</button>
       </div>
-      <p>Anyone with this ID can access its tasks. A new ID keeps previous tasks under the old ID. Save it to return later.</p>
-      {disabled && <p>Wait for task submission before switching identity.</p>}
-      <p role="status">{message}</p>
+      {editing && (
+        <form id="identity-editor" className="identity-editor" onSubmit={(event) => {
+          event.preventDefault();
+          if (!disabled) selectIdentity(draft);
+        }} onKeyDown={(event) => {
+          if (event.key === "Escape") { setEditing(false); setMessage(""); }
+        }}>
+          <label htmlFor="user-id">User ID</label>
+          <input id="user-id" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={disabled} spellCheck={false} autoComplete="off" autoFocus />
+          <div className="identity-actions">
+            <button type="submit" disabled={disabled}>Save</button>
+            <button type="button" onClick={() => { setEditing(false); setMessage(""); }}>Cancel</button>
+          </div>
+          <p>Anyone with this ID can access its tasks. Save your current ID to return later.</p>
+        </form>
+      )}
+      <div className="identity-message" role="status">{message}</div>
     </section>
   );
 }

@@ -79,6 +79,7 @@ export default function Home() {
 
   return (
     <main className="app-shell">
+      <UserIdentity disabled={tasks.submitting} onChange={changeUser} />
       <section className="hero">
         <div className="workspace-pill"><span className="brand-orb" aria-hidden="true" />Langdock Platform</div>
         <h1>What are we working on?</h1>
@@ -94,8 +95,6 @@ export default function Home() {
         </form>
         <p className="connection-note">Tasks run in a separate worker. Closing this page does not stop execution.</p>
       </section>
-
-      <UserIdentity disabled={tasks.submitting} onChange={changeUser} />
 
       <section className="task-history" aria-label="Your tasks">
         <div className="section-heading"><span className="section-label">Your tasks</span></div>
