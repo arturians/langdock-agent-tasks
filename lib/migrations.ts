@@ -107,6 +107,8 @@ const migrations = [
       WHERE status IN ('pending', 'running');
   `,
 
+  `DROP INDEX runs_user_created;
+   CREATE INDEX runs_user_created ON runs(user_id, created_at DESC, id DESC);`,
 ];
 
 /** Version and schema changes commit together; concurrent openers serialize here. */

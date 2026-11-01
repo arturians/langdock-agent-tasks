@@ -107,3 +107,6 @@ h1 { font-size: clamp(28px, 5vw, 36px); font-weight: 520; letter-spacing: -.035e
   .connection-note { line-height: 1.5; }
   .timeline-row time { display: none; }
 }
+
+.load-more { background: none; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--secondary); font: inherit; font-size: 12px; margin-top: 12px; padding: 8px 12px; }
+.load-more:hover { color: var(--text); }

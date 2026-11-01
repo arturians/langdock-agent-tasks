@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { openDatabase } from "../lib/db.ts";
 import { readSnapshots } from "../lib/read-sse.ts";
 import type { RunProgress } from "../lib/run-progress.ts";
-import type { RunSummary } from "../lib/types.ts";
+import type { RunPage, RunSummary } from "../lib/types.ts";
 import { createRun } from "../lib/run-store.ts";
 
 test("accepted work survives API restart and remains scoped to its user", { timeout: 30_000 }, async () => {
@@ -126,6 +126,21 @@ test("accepted work survives API restart and remains scoped to its user", { time
     const lastEvent = failure?.events.at(-1);
     assert.ok(lastEvent?.type === "run.failed");
     assert.equal(lastEvent.error, "Missing recommendation.");
+    const firstPage = await (await fetch(`${base}/api/runs?limit=1`, { headers })).json() as RunPage;
+    assert.equal(firstPage.runs.length, 1);
+    assert.ok(firstPage.nextCursor);
+    const nextPage = await (await fetch(`${base}/api/runs?limit=1&cursor=${firstPage.nextCursor}`, { headers })).json() as RunPage;
+    assert.equal(nextPage.runs.length, 1);
+    assert.notEqual(firstPage.runs[0].id, nextPage.runs[0].id);
+    assert.equal(nextPage.nextCursor, null);
+    for (const query of ["limit=0", "limit=101", "cursor=bad"]) {
+      assert.equal((await fetch(`${base}/api/runs?${query}`, { headers })).status, 400);
+    }
+    const liveWindow = readSnapshots<RunPage>(await fetch(`${base}/api/runs/events?limit=1&through=${nextPage.endCursor}`, {
+      headers, signal: AbortSignal.timeout(5000),
+    }));
+    assert.equal((await liveWindow.next()).value?.runs.length, 2);
+    await liveWindow.return(undefined);
   } finally {
     streams.abort();
     await stop(api);

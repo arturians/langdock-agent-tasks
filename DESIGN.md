@@ -121,7 +121,9 @@ use it. The external document/reset panel remains a shared development tool.
   is no retry policy, backoff, attempt limit, cancellation API, or manual retry UI.
 - Submission is not idempotent. If its response is lost, inspect history before
   submitting again; repeating POST can create a second task.
-- History has no pagination or retention policy. Step output carries cumulative
+- History uses a `(created_at, id)` keyset cursor and a matching owner index.
+  Its SSE snapshot covers the loaded range plus new tasks; a large loaded range
+  can still produce large snapshots. There is no retention policy. Step output carries cumulative
   context and has no size limit or schema version. Inputs are assumed small.
 - The fake external service runs as an imported library, not over a network.
   Tests reproduce the independent-commit failure window but not network ambiguity.
@@ -140,7 +142,7 @@ use it. The external document/reset panel remains a shared development tool.
 Use authenticated principals for task access, define task and step schema
 versions, add submission idempotency, bounded retries and cancellation semantics,
 and implement reconciliation for tools without idempotency support. Introduce
-structured logs, attempt history, authenticated worker notifications, shared pub/sub, metrics, pagination, retention, and backups.
+structured logs, attempt history, authenticated worker notifications, shared pub/sub, metrics, retention, and backups.
 
 For multiple hosts or higher write throughput, move claims and state to a shared
 transactional database or evaluate a durable workflow engine. A broker can wake

@@ -33,5 +33,9 @@ user approval.
    streams, reconnect snapshots, and 15-second server-side reconciliation.
 
 10. Move execution leases to steps and carry step ownership through notifications.
-    Reviewed and approved for commit. Owner-consistent schema migration,
+    Committed: `9afe533`. Owner-consistent schema migration,
     per-step claims/heartbeats/fencing, and validated userId/runId/stepId SSE updates.
+
+11. Add cursor pagination to task history without losing live SSE updates.
+    Reviewed and approved for commit. created_at/id keyset, bounded pages,
+    load-more UI, matching index, and live snapshots across the loaded range.

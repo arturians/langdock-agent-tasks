@@ -117,6 +117,29 @@ Temporary connection errors are displayed separately from task failure and reads
 retry automatically. The fake external documents panel is still a shared
 development view; user IDs do not provide authentication.
 
+### Cursor pagination
+
+History starts with 20 tasks; **Load more tasks** appends the next page.
+`GET /api/runs?limit=20` returns `{ runs, nextCursor, endCursor }`.
+Request the next page with `GET /api/runs?limit=20&cursor=<nextCursor>` and the
+same `X-User-Id` header. `nextCursor: null` means no older tasks remain, including
+when the last page is nonempty. Limits must be integers from 1 to 100; malformed
+limits or cursors return 400.
+
+Cursors are opaque Base64URL-encoded `{ createdAt, id }` values. Ordering is
+`created_at DESC, id DESC`; UUID v4 is a tiebreaker, not a time-ordered identifier.
+Migration 4 extends the owner/history index to `(user_id, created_at DESC, id DESC)`.
+New tasks above a cursor do not shift subsequent older pages. This is keyset
+pagination over live data, not a frozen database snapshot.
+
+The SSE history endpoint accepts `limit` and an optional `through=<endCursor>`.
+The client pins the oldest loaded row and expands that boundary after loading
+another page, so snapshots include new tasks and all loaded older tasks without
+replacing the list with just the latest page. Reconnect uses the same boundary.
+`endCursor` is the last returned row even when `nextCursor` is null. A selected
+task older than the first page can still be restored by an owner-scoped lookup.
+Loaded pages themselves are not persisted across a full browser reload.
+
 ### SQLite storage
 
 The SQLite storage layer uses the built-in `node:sqlite` module. The API creates

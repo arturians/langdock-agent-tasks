@@ -110,6 +110,9 @@ export default function Home() {
             </button>
           ))}
         </div>
+        {tasks.hasMore && <button className="load-more" type="button" disabled={tasks.loadingMore} onClick={() => void tasks.loadMore()}>
+          {tasks.loadingMore ? "Loading…" : "Load more tasks"}
+        </button>}
       </section>
 
       <section className="activity" aria-live="polite">

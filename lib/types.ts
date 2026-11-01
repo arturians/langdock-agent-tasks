@@ -8,6 +8,12 @@ export type RunSummary = {
   updated_at: number;
 };
 
+export type RunPage = {
+  runs: RunSummary[];
+  nextCursor: string | null;
+  endCursor: string | null;
+};
+
 export type AgentEvent =
   | {
       type: "run.started";

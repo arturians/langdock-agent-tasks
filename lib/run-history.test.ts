@@ -14,10 +14,10 @@ test("history is owner-scoped and ordered newest first with no output or lease d
     const foreign = createRun(db, { ...input, userId: "b" });
     db.prepare("UPDATE runs SET created_at = 100 WHERE id = ?").run(old);
     db.prepare("UPDATE runs SET created_at = 200 WHERE id = ?").run(recent);
-    const runs = listUserRuns(db, "a");
+    const runs = listUserRuns(db, "a").runs;
     assert.deepEqual(runs.map(run => run.id), [recent, old]);
-    assert.equal(listUserRuns(db, "b")[0].id, foreign);
-    assert.deepEqual(listUserRuns(db, "unknown"), []);
+    assert.equal(listUserRuns(db, "b").runs[0].id, foreign);
+    assert.deepEqual(listUserRuns(db, "unknown").runs, []);
     assert.equal("lease_token" in runs[0], false);
     assert.equal(readUserProgress(db, "a", foreign), null);
     assert.equal(restoredSelection(runs, old), old);
@@ -44,6 +44,6 @@ test("completed and failed tasks retain inspectable results and error events", (
     const event = readUserProgress(db, "a", failedId)?.events.at(-1);
     assert.ok(event?.type === "run.failed");
     assert.equal(event.error, "Saved failure");
-    assert.deepEqual(new Set(listUserRuns(db, "a").map(run => run.status)), new Set(["completed", "failed"]));
+    assert.deepEqual(new Set(listUserRuns(db, "a").runs.map(run => run.status)), new Set(["completed", "failed"]));
   } finally { db.close(); }
 });

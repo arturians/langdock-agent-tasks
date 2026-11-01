@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { RunSummary } from "./types.ts";
+import { encodeRunCursor } from "./run-pagination.ts";
+import type { RunCursor } from "./run-pagination.ts";
+import type { RunPage, RunSummary } from "./types.ts";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -122,9 +124,38 @@ export function findUserRun(db: DatabaseSync, userId: string, runId: string) {
   return db.prepare("SELECT * FROM runs WHERE id = ? AND user_id = ?").get(runId, userId);
 }
 
-export function listUserRuns(db: DatabaseSync, userId: string): RunSummary[] {
-  return db.prepare(`SELECT id, prompt, status, created_at, updated_at FROM runs
-    WHERE user_id = ? ORDER BY created_at DESC, id DESC`).all(userId) as RunSummary[];
+function cursorFor(run: RunSummary): string {
+  return encodeRunCursor({ createdAt: run.created_at, id: run.id });
+}
+
+export function listUserRuns(db: DatabaseSync, userId: string, options: { limit: number; cursor?: RunCursor } = { limit: 20 }): RunPage {
+  const { limit, cursor } = options;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid page size.");
+  const rows = (cursor
+    ? db.prepare(`SELECT id, prompt, status, created_at, updated_at FROM runs WHERE user_id = ?
+        AND (created_at < ? OR (created_at = ? AND id < ?))
+        ORDER BY created_at DESC, id DESC LIMIT ?`).all(userId, cursor.createdAt, cursor.createdAt, cursor.id, limit + 1)
+    : db.prepare(`SELECT id, prompt, status, created_at, updated_at FROM runs WHERE user_id = ?
+        ORDER BY created_at DESC, id DESC LIMIT ?`).all(userId, limit + 1)) as RunSummary[];
+  const runs = rows.slice(0, limit);
+  const endCursor = runs.length ? cursorFor(runs[runs.length - 1]) : null;
+  return { runs, endCursor, nextCursor: rows.length > limit ? endCursor : null };
+}
+
+/** Live snapshots cover exactly the loaded range, plus newly created tasks above it. */
+export function readUserRunWindow(db: DatabaseSync, userId: string, limit: number, through?: RunCursor): RunPage {
+  if (!through) return listUserRuns(db, userId, { limit });
+  db.exec("BEGIN");
+  try {
+    const runs = db.prepare(`SELECT id, prompt, status, created_at, updated_at FROM runs WHERE user_id = ?
+      AND (created_at > ? OR (created_at = ? AND id >= ?))
+      ORDER BY created_at DESC, id DESC`).all(userId, through.createdAt, through.createdAt, through.id) as RunSummary[];
+    const endCursor = runs.length ? cursorFor(runs[runs.length - 1]) : null;
+    const older = db.prepare(`SELECT id FROM runs WHERE user_id = ?
+      AND (created_at < ? OR (created_at = ? AND id < ?)) LIMIT 1`)
+      .get(userId, through.createdAt, through.createdAt, through.id);
+    return { runs, endCursor, nextCursor: older ? encodeRunCursor(through) : null };
+  } finally { db.exec("COMMIT"); }
 }
 
 /** Persist acceptance and only the first step; later steps are produced at runtime. */

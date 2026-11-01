@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RunProgress } from "@/lib/run-progress";
-import type { RunSummary } from "@/lib/types";
+import { mergeRunPages } from "@/lib/merge-run-pages";
+import type { RunPage } from "@/lib/types";
 import { restoredSelection, selectionKey } from "@/lib/run-selection";
 import { readSnapshots } from "@/lib/read-sse";
 import { USER_ID_HEADER } from "@/lib/user-id";
 
 export function useRuns(userId: string) {
-  const [history, setHistory] = useState<{ userId: string; runs: RunSummary[] }>({ userId: "", runs: [] });
+  const [history, setHistory] = useState<RunPage & { userId: string }>({ userId: "", runs: [], nextCursor: null, endCursor: null });
   const [selection, setSelection] = useState<{ userId: string; id: string | null }>({ userId: "", id: null });
   const [snapshot, setSnapshot] = useState<{ userId: string; id: string; progress: RunProgress } | null>(null);
   const [historyError, setHistoryError] = useState<{ userId: string; message: string } | null>(null);
@@ -16,9 +17,19 @@ export function useRuns(userId: string) {
   const [submissionError, setSubmissionError] = useState<{ userId: string; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submission = useRef<AbortController | null>(null);
+  const pagination = useRef<AbortController | null>(null);
+  const [boundary, setBoundary] = useState<{ userId: string; cursor: string | null }>({ userId: "", cursor: null });
+  const [moreRequest, setMoreRequest] = useState<{ userId: string; controller: AbortController } | null>(null);
+  const through = boundary.userId === userId ? boundary.cursor : null;
   const selectedId = selection.userId === userId ? selection.id : null;
 
   useEffect(() => () => submission.current?.abort(), []);
+  useEffect(() => {
+    return () => {
+      pagination.current?.abort();
+      pagination.current = null;
+    };
+  }, [userId]);
 
   const selectRun = useCallback((id: string) => {
     setSelection({ userId, id });
@@ -34,16 +45,35 @@ export function useRuns(userId: string) {
     if (!userId) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
+    let restorationAttempted = false;
     async function connect() {
       try {
-        const response = await fetch("/api/runs/events", { headers: { [USER_ID_HEADER]: userId }, cache: "no-store", signal: controller.signal });
-        for await (const { runs } of readSnapshots<{ runs: RunSummary[] }>(response)) {
+        const params = new URLSearchParams({ limit: "20" });
+        if (through) params.set("through", through);
+        const response = await fetch(`/api/runs/events?${params}`, { headers: { [USER_ID_HEADER]: userId }, cache: "no-store", signal: controller.signal });
+        for await (const page of readSnapshots<RunPage>(response)) {
+          const { runs } = page;
           if (controller.signal.aborted) return;
-          setHistory({ userId, runs });
+          setHistory({ userId, ...page });
+          if (page.endCursor) setBoundary(current => current.userId === userId && current.cursor === page.endCursor
+            ? current : { userId, cursor: page.endCursor });
           setHistoryError(null);
-          let saved: string | null = null;
-          try { saved = localStorage.getItem(selectionKey(userId)); } catch { /* Use the latest task. */ }
-          const restored = restoredSelection(runs, saved);
+          let restored: string | null = runs[0]?.id ?? null;
+          if (!restorationAttempted) {
+            let saved: string | null = null;
+            try { saved = localStorage.getItem(selectionKey(userId)); } catch { /* Use the latest task. */ }
+            restored = restoredSelection(runs, saved);
+            // A saved selection can be older than the first loaded page.
+            if (saved && !runs.some(run => run.id === saved)) {
+              const owned = await fetch(`/api/runs/${encodeURIComponent(saved)}`, {
+                headers: { [USER_ID_HEADER]: userId }, cache: "no-store", signal: controller.signal,
+              });
+              if (owned.ok) restored = saved;
+              else if (owned.status !== 404) throw new Error("Cannot restore the selected task. Reconnecting.");
+            }
+            restorationAttempted = true;
+          }
+          if (controller.signal.aborted) return;
           setSelection((current) => current.userId === userId && current.id !== null ? current : { userId, id: restored });
         }
         if (!controller.signal.aborted) setHistoryError({ userId, message: "History connection lost. Reconnecting." });
@@ -55,7 +85,7 @@ export function useRuns(userId: string) {
     }
     void connect();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [userId]);
+  }, [userId, through]);
 
   useEffect(() => {
     if (!userId || !selectedId) return;
@@ -88,6 +118,32 @@ export function useRuns(userId: string) {
     return () => { controller.abort(); clearTimeout(timer); };
   }, [userId, selectedId]);
 
+  async function loadMore() {
+    if (pagination.current || history.userId !== userId || !history.nextCursor) return;
+    const controller = new AbortController();
+    pagination.current = controller;
+    setMoreRequest({ userId, controller });
+    try {
+      const params = new URLSearchParams({ limit: "20", cursor: history.nextCursor });
+      const response = await fetch(`/api/runs?${params}`, {
+        headers: { [USER_ID_HEADER]: userId }, cache: "no-store", signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("Cannot load more tasks. Try again.");
+      const page = await response.json() as RunPage;
+      if (controller.signal.aborted) return;
+      setHistory(current => current.userId === userId ? { userId, ...mergeRunPages(current, page) } : current);
+      if (page.endCursor) setBoundary({ userId, cursor: page.endCursor });
+      setHistoryError(null);
+    } catch (error) {
+      if (!controller.signal.aborted) setHistoryError({ userId, message: error instanceof Error ? error.message : "Cannot load more tasks." });
+    } finally {
+      if (pagination.current === controller) {
+        pagination.current = null;
+        setMoreRequest(current => current?.controller === controller ? null : current);
+      }
+    }
+  }
+
   async function submit(prompt: string) {
     if (!userId || submission.current) return;
     const controller = new AbortController();
@@ -119,6 +175,7 @@ export function useRuns(userId: string) {
     historyError: historyError?.userId === userId ? historyError.message : null,
     progressError: progressError?.userId === userId && progressError.id === selectedId ? progressError.message : null,
     submissionError: submissionError?.userId === userId ? submissionError.message : null,
-    submitting, selectRun, submit,
+    submitting, selectRun, submit, loadMore, loadingMore: moreRequest?.userId === userId && !moreRequest.controller.signal.aborted,
+    hasMore: history.userId === userId && history.nextCursor !== null,
   };
 }
