@@ -7,6 +7,13 @@ persistent task store and a small queue. The browser observes stored state and
 can disappear without cancelling execution. There is no in-memory task queue
 that must survive an API or worker restart.
 
+This is a deliberately simplified implementation for the time-bounded assignment.
+Several production concerns are left out so the prototype can demonstrate state
+persistence, recovery, and idempotency without additional infrastructure. In
+particular, the queue is implemented directly in SQLite and workers poll for ready
+steps. This keeps local setup small; it is not a proposal to use this queue unchanged
+for a large production deployment.
+
 ```mermaid
 flowchart LR
     Browser["Browser: user ID and selected run in localStorage"]
@@ -158,6 +165,53 @@ For multiple hosts or higher write throughput, move claims and state to a shared
 transactional database or evaluate a durable workflow engine. A broker can wake
 workers, but persisted workflow state and external-operation idempotency remain
 necessary. Define execution and timeout policies before expanding concurrency.
+
+One proposed production architecture separates durable workflow state from work
+delivery. Tasks and steps remain in a shared database, while workers receive
+notifications about committed, ready steps through a broker or change stream.
+There are two possible publication mechanisms:
+
+- **Transactional outbox and message broker:** the transaction that creates a ready
+  step also inserts an outbox record. A separate relay publishes committed outbox
+  records to the broker and retries publication on failure. This avoids the gap
+  between committing work and independently sending its notification.
+- **Change data capture (CDC):** a database change stream, such as DynamoDB Streams,
+  exposes committed changes to a consumer that dispatches work, directly or through
+  a broker. This is an alternative publication mechanism, not an additional
+  mandatory layer after an outbox. Consumers must identify ready-step changes;
+  arbitrary database updates must not start new executions.
+
+For the outbox variant, the proposed flow is:
+
+```mermaid
+flowchart LR
+    API["API"] --> Accept["Transaction: task, first step, outbox record"]
+    Accept --> Relay["Outbox relay"]
+    Relay --> Broker["Message broker"]
+    Broker --> Worker["Worker: validate state and claim step"]
+    Worker --> Result["Transaction: output, next step or final result, outbox records"]
+    Result --> Relay
+    Broker --> Updates["API subscribers: committed result updates"]
+    Updates --> SSE["SSE clients"]
+```
+
+The same publication mechanism can deliver execution results: after output and
+the continuation or final state commit, the corresponding outbox records or CDC
+changes notify API instances, which update their connected SSE clients. Worker
+execution remains independent of API availability.
+
+Messages carry identifiers such as `userId`, `runId`, and `stepId`; the database
+remains the source of truth. Receiving a message does not grant execution rights:
+the worker still validates the current state and atomically claims the step.
+Duplicate or delayed delivery must be safe, and step fencing and external-operation
+idempotency remain necessary. A stream record is not a cross-record transaction
+boundary for its consumers; execution decisions must rely on committed database
+state. The SQLite queue and current HTTP wake-ups remain the implemented prototype;
+the outbox, relay, broker, and CDC integration above are proposals only.
+
+References: [AWS transactional outbox guidance](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html),
+[DynamoDB transaction propagation](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html),
+and [DynamoDB Streams consumer idempotency](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Streams.Lambda.BestPracticesWithDynamoDB.html).
 
 ## Validation
 
