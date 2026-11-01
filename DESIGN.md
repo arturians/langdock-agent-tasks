@@ -18,7 +18,8 @@ flowchart LR
     External["Fake external service"]
     ExternalDB[("fake-external.db: documents and unique operation keys")]
     Browser -->|"POST /api/runs"| API
-    Browser -->|"GET history and progress"| API
+    API -->|"SSE: history and progress snapshots"| Browser
+    Worker -->|"HTTP wake-up after commit"| API
     API --> DB
     Worker <-->|"claim, heartbeat, recovery"| DB
     Worker --> Service
@@ -84,8 +85,12 @@ these guarantees.
 History is filtered by `user_id`; reading another user's task returns 404.
 A UUID in localStorage identifies the user and can be copied or entered manually.
 The selected task is saved separately per user. Reloading restores observation;
-changing tasks cancels old polling requests without cancelling execution.
-History polls every 1.5 seconds; active task progress polls every 750 ms.
+changing tasks closes old SSE connections without cancelling execution.
+The worker sends best-effort HTTP notifications after state commits; the API
+reads SQLite and pushes user-scoped snapshots over SSE. History has its own
+stream; selected-task streams close at a terminal status. Reconnection sends a
+fresh snapshot. Keepalive/reconciliation every 15 seconds covers missed wake-ups
+without browser polling. A notification failure never fails agent execution.
 Connection errors are separate from persisted task failures and reads retry.
 The timeline is reconstructed from step state, not an immutable event log, so
 it shows the latest attempt timestamps rather than every historical attempt.
@@ -111,6 +116,10 @@ use it. The external document/reset panel remains a shared development tool.
 - Legacy JSON documents import once without operation keys. Deduplication cannot
   retroactively cover calls interrupted before this upgrade. Development reset
   removes documents and keys; replaying a task afterwards may recreate a document.
+- Notifications use a process-local hub and a configurable API URL (default
+  localhost:3000). Multiple API replicas require shared pub/sub for immediate
+  delivery; 15-second reconciliation covers missed notifications. The prototype
+  wake-up endpoint is not authenticated and is intended for a trusted local setup.
 - There are no backups, disk-loss recovery, metrics, or immutable audit events.
   The API crash button terminates only Next.js; worker crash testing is separate.
 
@@ -119,7 +128,7 @@ use it. The external document/reset panel remains a shared development tool.
 Use authenticated principals for task access, define task and step schema
 versions, add submission idempotency, bounded retries and cancellation semantics,
 and implement reconciliation for tools without idempotency support. Introduce
-structured logs, attempt history, metrics, pagination, retention, and backups.
+structured logs, attempt history, authenticated worker notifications, shared pub/sub, metrics, pagination, retention, and backups.
 
 For multiple hosts or higher write throughput, move claims and state to a shared
 transactional database or evaluate a durable workflow engine. A broker can wake
@@ -132,4 +141,6 @@ necessary. Define execution and timeout policies before expanding concurrency.
 registration, lease renewal and stale-write fencing, real worker SIGKILL recovery,
 parallel external calls, legacy import, and the external-commit/step-commit crash
 window. `pnpm typecheck`, `pnpm lint`, and `pnpm build` check the application.
+The HTTP integration test also checks live worker-to-SSE delivery before the
+reconciliation timer, failure delivery, stream ownership, and reconnect snapshots.
 See README for startup and manual failure scenarios.

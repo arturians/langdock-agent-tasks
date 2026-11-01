@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { DatabaseSync } from "node:sqlite";
+import { WorkerNotifier } from "./run-notifications.ts";
 import { runAgent } from "./agent.ts";
 import { claimRun, releaseLease, renewLease } from "./run-store.ts";
 
@@ -8,6 +9,7 @@ export async function workOnce(db: DatabaseSync, signal: AbortSignal, leaseMs = 
   signal.throwIfAborted();
   const run = claimRun(db, leaseMs);
   if (!run) return false;
+  const notifier = new WorkerNotifier();
   const controller = new AbortController();
   const stop = () => controller.abort(signal.reason);
   signal.addEventListener("abort", stop, { once: true });
@@ -21,12 +23,14 @@ export async function workOnce(db: DatabaseSync, signal: AbortSignal, leaseMs = 
   try {
     await runAgent({
       db, runId: run.id, prompt: run.prompt, leaseToken: run.lease_token,
-      signal: controller.signal, emit: () => {},
+      signal: controller.signal, emit: () => notifier.notify(run.id),
     });
   } finally {
     clearInterval(heartbeat);
     signal.removeEventListener("abort", stop);
     releaseLease(db, run.id, run.lease_token);
+    notifier.notify(run.id);
+    await notifier.flush();
   }
   return true;
 }

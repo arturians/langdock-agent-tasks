@@ -1,3 +1,4 @@
+import { publishRunUpdate } from "@/lib/run-notifications";
 import { firstStep } from "@/lib/agent";
 import { requestUserId } from "@/lib/user-id";
 import { openDatabase } from "@/lib/db";
@@ -32,6 +33,7 @@ export async function POST(request: Request): Promise<Response> {
   const db = openDatabase();
   try {
     const runId = createRun(db, { userId, prompt, firstStep: firstStep(prompt) });
+    publishRunUpdate(userId, runId);
     return Response.json({ runId }, { status: 202 });
   } finally {
     db.close();

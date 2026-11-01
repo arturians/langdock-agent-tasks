@@ -26,4 +26,8 @@ user approval.
 7. Idempotent external document creation.
    Committed: `5df3e23`.
 8. Recovery scenario tests and final README / DESIGN documentation.
-   Reviewed and approved for commit.
+   Committed: `95afb42`.
+
+9. Replace browser polling with worker notifications and SSE snapshots.
+   Reviewed and approved for commit. HTTP wake-ups after commit, user-scoped
+   streams, reconnect snapshots, and 15-second server-side reconciliation.

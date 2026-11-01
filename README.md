@@ -103,14 +103,15 @@ registers valid identities in SQLite. This is a prototype identity mechanism,
 not authentication: anyone who knows an ID can use it.
 
 `GET /api/runs` lists only the current user's tasks, newest first. The page
-refreshes history every 1.5 seconds and the selected active task every 750 ms.
+receives history through `GET /api/runs/events` and selected-task progress through
+`GET /api/runs/[id]/events`, using persistent SSE connections.
 Select any task to inspect its progress, saved result, or failure. New tasks can
 be submitted while other tasks are executing; the worker processes its queue.
 
 The selected task ID is stored separately for each user as
 `agent-selected-run:<userId>`. Reloading or reopening the page restores that task
 and resumes observation. If the saved task is unavailable, the latest owned task
-is selected. Switching user IDs cancels observation requests and displays that
+is selected. Switching user IDs closes observation streams and displays that
 user's history without stopping execution. Switching back restores the selection.
 Temporary connection errors are displayed separately from task failure and reads
 retry automatically. The fake external documents panel is still a shared
@@ -120,7 +121,8 @@ development view; user IDs do not provide authentication.
 
 The SQLite storage layer uses the built-in `node:sqlite` module. The API creates
 a run and its first step, then returns `202 { runId }`. A separate worker
-executes tasks. The page polls `GET /api/runs/[id]` with its user ID.
+executes tasks and notifies the API over HTTP; the API pushes saved state to the
+page over SSE. The user ID stays in the `X-User-Id` header.
 
 `openDatabase()` in `lib/db.ts` creates `.runtime/agent.db` and applies versioned
 migrations automatically. Connections enable foreign keys, WAL journaling,
@@ -170,6 +172,40 @@ Both processes must use the same working directory and persistent local disk.
 `AGENT_DB_PATH` can override the database file for both processes. Closing the
 browser or stopping Next.js does not stop the worker. The page retries reads after a temporary API outage and restores the selected
 task after a full page refresh.
+
+### Worker notifications and SSE
+
+After committing state, the worker sends `POST /api/internal/run-updates` with
+`{ runId }`. The API determines ownership from SQLite, reads the committed state,
+and broadcasts snapshots to the matching user's SSE connections. Submission
+also notifies history observers. Browser history and progress no longer poll.
+The JSON GET endpoints remain available for inspection.
+
+The worker defaults to `AGENT_API_URL=http://127.0.0.1:3000`. If Next.js uses a
+different port, start the worker with its actual URL, for example:
+
+```bash
+AGENT_API_URL=http://127.0.0.1:3001 pnpm worker
+```
+
+Every SSE connection starts with a current database snapshot. The client
+reconnects after one second if disconnected; it closes the selected-task stream
+on completion or failure. Switching users/tasks aborts the old streams without
+stopping execution. SSE is consumed through fetch so the identity header can be
+sent, rather than putting the ID in a URL.
+
+Notifications are best-effort wake-ups: a one-second notification timeout does
+not fail agent work. To cover a crash between commit and notification or an API
+outage, each connected SSE endpoint reconciles with SQLite every 15 seconds and
+sends a snapshot only when changed, plus keepalive comments. This is low-frequency
+server-side reconciliation, not repeated browser HTTP requests. The timeline is
+a state snapshot, not a guaranteed stream of every attempt/event.
+
+The notification hub is local to a single API process. Multiple API replicas
+would need shared pub/sub; otherwise other replicas rely on reconciliation.
+The wake-up endpoint cannot mutate task state or accept client-supplied progress,
+but is not authenticated in this prototype. Production should restrict internal
+notifications and authenticate user streams.
 
 ### Idempotent external documents
 
@@ -223,7 +259,7 @@ For easier observation, run the worker with the slower timings below.
 | Browser refresh or close | Submit a task, refresh or reopen the page | The same user and selected task are restored; execution continues |
 | Switch tasks | Submit two tasks and select either history entry | Observation changes; both tasks remain queued or executing |
 | Switch users | Copy the current ID, choose Reset, then enter the old ID | The new ID has separate history; the old ID restores its tasks |
-| API interruption | Use Simulate API crash, or stop `pnpm dev`; restart it | The worker continues; polling resumes when the API returns |
+| API interruption | Use Simulate API crash, or stop `pnpm dev`; restart it | The worker continues; SSE reconnects when the API returns |
 | Worker interruption | Stop `pnpm worker` with Ctrl+C, then restart it | Unfinished work resumes; committed steps are skipped |
 | Worker hard crash | Send SIGKILL to the worker PID, then restart it | Recovery waits for the old lease to expire, up to 15 seconds |
 | External-call crash window | Run `pnpm test` | A subprocess exits after external commit; recovery reuses the original document |

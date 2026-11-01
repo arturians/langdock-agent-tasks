@@ -8,6 +8,10 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { openDatabase } from "../lib/db.ts";
+import { readSnapshots } from "../lib/read-sse.ts";
+import type { RunProgress } from "../lib/run-progress.ts";
+import type { RunSummary } from "../lib/types.ts";
+import { createRun } from "../lib/run-store.ts";
 
 test("accepted work survives API restart and remains scoped to its user", { timeout: 30_000 }, async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "agent-http-"));
@@ -24,6 +28,7 @@ test("accepted work survives API restart and remains scoped to its user", { time
   let api: Child | undefined;
   let worker: Child | undefined;
   let logs = "";
+  const streams = new AbortController();
   const start = (args: string[]) => {
     const child = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout!.on("data", chunk => { logs += chunk; });
@@ -53,6 +58,7 @@ test("accepted work survives API restart and remains scoped to its user", { time
     const port = address.port;
     await new Promise<void>((resolve, reject) => socket.close(error => error ? reject(error) : resolve()));
     const base = `http://127.0.0.1:${port}`;
+    env.AGENT_API_URL = base;
     const launchApi = async () => {
       api = start(["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)]);
       await waitFor(async () => {
@@ -61,11 +67,24 @@ test("accepted work survives API restart and remains scoped to its user", { time
     };
     await launchApi();
     assert.equal((await fetch(`${base}/api/runs`)).status, 400);
+    const historyStream = readSnapshots<{ runs: RunSummary[] }>(await fetch(`${base}/api/runs/events`, {
+      headers, signal: AbortSignal.any([streams.signal, AbortSignal.timeout(5000)]),
+    }));
+    assert.deepEqual((await historyStream.next()).value?.runs, []);
     const submitted = await fetch(`${base}/api/runs`, { method: "POST", headers, body: JSON.stringify({ prompt: "Survive API restart" }) });
     assert.equal(submitted.status, 202);
     const { runId } = await submitted.json();
+    assert.equal((await historyStream.next()).value?.runs[0].id, runId);
     assert.equal(db.prepare("SELECT status FROM runs WHERE id = ?").get(runId)?.status, "queued");
+    const progressStream = readSnapshots<RunProgress>(await fetch(`${base}/api/runs/${runId}/events`, {
+      headers, signal: AbortSignal.any([streams.signal, AbortSignal.timeout(5000)]),
+    }));
+    assert.equal((await progressStream.next()).value?.status, "queued");
     worker = start(["scripts/worker.ts"]);
+    // This must arrive before the 15-second reconciliation timer: real worker push.
+    assert.equal((await progressStream.next()).value?.status, "running");
+    await progressStream.return(undefined);
+    await historyStream.return(undefined);
     await waitFor(() => db.prepare("SELECT status FROM run_steps WHERE run_id = ? AND step_number = 1").get(runId)?.status === "running");
     await stop(api);
     await waitFor(() => db.prepare("SELECT status FROM runs WHERE id = ?").get(runId)?.status === "completed");
@@ -75,12 +94,29 @@ test("accepted work survives API restart and remains scoped to its user", { time
     assert.equal(history.runs[0].status, "completed");
     const progress = await (await fetch(`${base}/api/runs/${runId}`, { headers })).json();
     assert.equal(progress.events.at(-1).type, "run.completed");
+    const reconnected = readSnapshots<RunProgress>(await fetch(`${base}/api/runs/${runId}/events`, { headers }));
+    assert.equal((await reconnected.next()).value?.status, "completed");
+    assert.equal((await reconnected.next()).done, true);
     const foreignHeaders = { "X-User-Id": other };
     assert.deepEqual((await (await fetch(`${base}/api/runs`, { headers: foreignHeaders })).json()).runs, []);
     assert.equal((await fetch(`${base}/api/runs/${runId}`, { headers: foreignHeaders })).status, 404);
+    assert.equal((await fetch(`${base}/api/runs/${runId}/events`, { headers: foreignHeaders })).status, 404);
     const documents = await (await fetch(`${base}/api/fake-tools/documents`)).json();
     assert.equal(documents.documents.length, 1);
+    const failedId = createRun(db, {
+      userId: owner, prompt: "Invalid step input",
+      firstStep: { type: "CreateDocumentProcessor", input: { prompt: "Missing recommendation" } },
+    });
+    let failure: RunProgress | undefined;
+    for await (const snapshot of readSnapshots<RunProgress>(await fetch(`${base}/api/runs/${failedId}/events`, {
+      headers, signal: AbortSignal.timeout(5000),
+    }))) failure = snapshot;
+    assert.equal(failure?.status, "failed");
+    const lastEvent = failure?.events.at(-1);
+    assert.ok(lastEvent?.type === "run.failed");
+    assert.equal(lastEvent.error, "Missing recommendation.");
   } finally {
+    streams.abort();
     await stop(api);
     await stop(worker);
     db.close();
