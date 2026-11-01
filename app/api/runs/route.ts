@@ -1,5 +1,8 @@
 import { runAgent } from "@/lib/agent";
 import type { AgentEvent } from "@/lib/types";
+import { requestUserId } from "@/lib/user-id";
+import { openDatabase } from "@/lib/db";
+import { ensureUser } from "@/lib/run-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,11 +12,22 @@ function serialize(event: AgentEvent): Uint8Array {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const userId = requestUserId(request);
+  if (!userId) {
+    return Response.json({ error: "A valid UUID in X-User-Id is required." }, { status: 400 });
+  }
   const body = (await request.json().catch(() => null)) as { prompt?: unknown } | null;
   const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
 
   if (!prompt) {
     return Response.json({ error: "A prompt is required." }, { status: 400 });
+  }
+
+  const db = openDatabase();
+  try {
+    ensureUser(db, userId);
+  } finally {
+    db.close();
   }
 
   const runId = crypto.randomUUID();

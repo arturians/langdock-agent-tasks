@@ -14,7 +14,7 @@
 * { box-sizing: border-box; }
 html { background: var(--canvas); color-scheme: dark; }
 body { background: var(--canvas); color: var(--text); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; }
-button, textarea { font: inherit; }
+button, textarea, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.45; }
 
@@ -35,6 +35,13 @@ h1 { font-size: clamp(28px, 5vw, 36px); font-weight: 520; letter-spacing: -.035e
 .spinner { animation: spin 800ms linear infinite; border: 2px solid rgba(255,255,255,.22); border-radius: 50%; border-top-color: var(--text); height: 15px; width: 15px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .connection-note { color: var(--muted); font-size: 11px; margin: 14px 0 0; }
+
+.user-identity { border-top: 1px solid var(--border); margin-top: 30px; padding-top: 18px; }
+.user-identity label { color: var(--secondary); display: block; font-size: 12px; margin-bottom: 8px; }
+.user-identity input { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: monospace; font-size: 12px; padding: 10px; width: 100%; }
+.identity-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.identity-actions button { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12px; padding: 7px 10px; }
+.user-identity p { color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 .activity, .external-system { border-top: 1px solid var(--border); margin-top: 52px; padding-top: 20px; }
 .external-system { margin-top: 38px; }

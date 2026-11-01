@@ -84,7 +84,23 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000). A normal run takes approximately 15 seconds.
 
-### Storage foundation
+### Client identity
+
+The page generates a UUID and stores it in local storage as `agent-user-id`.
+The User ID controls let you copy it, use a manually entered UUID, or generate
+a new one. Switching IDs clears the current run display; it does not delete
+stored tasks. Switching is disabled while a run is active. Changes in another
+tab reload the page to keep the identity consistent.
+
+Run requests include `X-User-Id`; the API rejects missing or invalid UUIDs and
+registers valid identities in SQLite. This is a prototype identity mechanism,
+not authentication: anyone who knows an ID can use it.
+
+Task persistence and history endpoints are not connected yet. The storage layer
+provides `findUserRun()` for owner-scoped reads; the fake external documents
+panel is still a shared development view.
+
+### SQLite storage
 
 The SQLite storage layer uses the built-in `node:sqlite` module. It is not yet
 connected to the agent or API: the starter still executes runs through an HTTP stream.

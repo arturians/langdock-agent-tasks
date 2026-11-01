@@ -2,6 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { AgentEvent, ExternalAction } from "@/lib/types";
+import { USER_ID_HEADER } from "@/lib/user-id";
+import { UserIdentity } from "./user-identity";
 
 const defaultPrompt = "Research the most important considerations for adopting an enterprise AI assistant.";
 
@@ -21,12 +23,19 @@ function eventLabel(event: AgentEvent): string {
 }
 
 export default function Home() {
+  const [userId, setUserId] = useState("");
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [documents, setDocuments] = useState<ExternalAction[]>([]);
   const [running, setRunning] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const abortController = useRef<AbortController | null>(null);
+
+  const changeUser = useCallback((id: string) => {
+    setUserId(id);
+    setEvents([]);
+    setRequestError(null);
+  }, []);
 
   const loadDocuments = useCallback(async () => {
     const response = await fetch("/api/fake-tools/documents", { cache: "no-store" });
@@ -47,7 +56,7 @@ export default function Home() {
 
   async function startRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!prompt.trim() || running) return;
+    if (!prompt.trim() || running || !userId) return;
 
     const controller = new AbortController();
     abortController.current = controller;
@@ -58,7 +67,7 @@ export default function Home() {
     try {
       const response = await fetch("/api/runs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", [USER_ID_HEADER]: userId },
         body: JSON.stringify({ prompt }),
         signal: controller.signal,
       });
@@ -128,13 +137,15 @@ export default function Home() {
           <textarea id="prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Give the agent a task…" rows={3} />
           <div className="composer-footer">
             <span>5 simulated steps · about 15 seconds</span>
-            <button aria-label="Start agent run" disabled={running || !prompt.trim()} type="submit">
+            <button aria-label="Start agent run" disabled={running || !prompt.trim() || !userId} type="submit">
               {running ? <span className="spinner" /> : <span aria-hidden="true">↑</span>}
             </button>
           </div>
         </form>
         <p className="connection-note">This starter keeps the run inside one HTTP request. Refreshing the page loses its progress.</p>
       </section>
+
+      <UserIdentity disabled={running} onChange={changeUser} />
 
       <section className="activity" aria-live="polite">
         <div className="section-heading">
