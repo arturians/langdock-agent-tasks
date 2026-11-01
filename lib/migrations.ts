@@ -109,6 +109,27 @@ const migrations = [
 
   `DROP INDEX runs_user_created;
    CREATE INDEX runs_user_created ON runs(user_id, created_at DESC, id DESC);`,
+  `
+    CREATE TABLE run_changes (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX run_changes_user_seq ON run_changes(user_id, seq);
+    CREATE INDEX run_changes_run_seq ON run_changes(run_id, seq);
+    CREATE TRIGGER runs_created_change AFTER INSERT ON runs BEGIN
+      INSERT INTO run_changes(user_id, run_id, prompt, status, created_at, updated_at)
+        VALUES (NEW.user_id, NEW.id, NEW.prompt, NEW.status, NEW.created_at, NEW.updated_at);
+    END;
+    CREATE TRIGGER runs_updated_change AFTER UPDATE ON runs BEGIN
+      INSERT INTO run_changes(user_id, run_id, prompt, status, created_at, updated_at)
+        VALUES (NEW.user_id, NEW.id, NEW.prompt, NEW.status, NEW.created_at, NEW.updated_at);
+    END;
+  `,
 ];
 
 /** Version and schema changes commit together; concurrent openers serialize here. */

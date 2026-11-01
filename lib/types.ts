@@ -6,13 +6,19 @@ export type RunSummary = {
   status: RunStatus;
   created_at: number;
   updated_at: number;
+  revision: number;
 };
 
 export type RunPage = {
   runs: RunSummary[];
   nextCursor: string | null;
   endCursor: string | null;
+  changeCursor: string;
 };
+
+export type RunHistoryEvent =
+  | { type: "ready"; cursor: string }
+  | { type: "run.updated"; cursor: string; run: RunSummary };
 
 export type AgentEvent =
   | {

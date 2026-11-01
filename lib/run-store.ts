@@ -128,33 +128,27 @@ function cursorFor(run: RunSummary): string {
   return encodeRunCursor({ createdAt: run.created_at, id: run.id });
 }
 
+export function runChangeCursor(db: DatabaseSync, userId: string): string {
+  return String(db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM run_changes WHERE user_id = ?").get(userId)!.seq);
+}
+
 export function listUserRuns(db: DatabaseSync, userId: string, options: { limit: number; cursor?: RunCursor } = { limit: 20 }): RunPage {
   const { limit, cursor } = options;
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid page size.");
-  const rows = (cursor
-    ? db.prepare(`SELECT id, prompt, status, created_at, updated_at FROM runs WHERE user_id = ?
-        AND (created_at < ? OR (created_at = ? AND id < ?))
-        ORDER BY created_at DESC, id DESC LIMIT ?`).all(userId, cursor.createdAt, cursor.createdAt, cursor.id, limit + 1)
-    : db.prepare(`SELECT id, prompt, status, created_at, updated_at FROM runs WHERE user_id = ?
-        ORDER BY created_at DESC, id DESC LIMIT ?`).all(userId, limit + 1)) as RunSummary[];
-  const runs = rows.slice(0, limit);
-  const endCursor = runs.length ? cursorFor(runs[runs.length - 1]) : null;
-  return { runs, endCursor, nextCursor: rows.length > limit ? endCursor : null };
-}
-
-/** Live snapshots cover exactly the loaded range, plus newly created tasks above it. */
-export function readUserRunWindow(db: DatabaseSync, userId: string, limit: number, through?: RunCursor): RunPage {
-  if (!through) return listUserRuns(db, userId, { limit });
   db.exec("BEGIN");
   try {
-    const runs = db.prepare(`SELECT id, prompt, status, created_at, updated_at FROM runs WHERE user_id = ?
-      AND (created_at > ? OR (created_at = ? AND id >= ?))
-      ORDER BY created_at DESC, id DESC`).all(userId, through.createdAt, through.createdAt, through.id) as RunSummary[];
+    const changeCursor = runChangeCursor(db, userId);
+    const columns = `id, prompt, status, created_at, updated_at,
+      COALESCE((SELECT MAX(seq) FROM run_changes WHERE run_id = runs.id), 0) AS revision`;
+    const rows = (cursor
+      ? db.prepare(`SELECT ${columns} FROM runs WHERE user_id = ?
+          AND (created_at < ? OR (created_at = ? AND id < ?))
+          ORDER BY created_at DESC, id DESC LIMIT ?`).all(userId, cursor.createdAt, cursor.createdAt, cursor.id, limit + 1)
+      : db.prepare(`SELECT ${columns} FROM runs WHERE user_id = ?
+          ORDER BY created_at DESC, id DESC LIMIT ?`).all(userId, limit + 1)) as RunSummary[];
+    const runs = rows.slice(0, limit);
     const endCursor = runs.length ? cursorFor(runs[runs.length - 1]) : null;
-    const older = db.prepare(`SELECT id FROM runs WHERE user_id = ?
-      AND (created_at < ? OR (created_at = ? AND id < ?)) LIMIT 1`)
-      .get(userId, through.createdAt, through.createdAt, through.id);
-    return { runs, endCursor, nextCursor: older ? encodeRunCursor(through) : null };
+    return { runs, endCursor, nextCursor: rows.length > limit ? endCursor : null, changeCursor };
   } finally { db.exec("COMMIT"); }
 }
 

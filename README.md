@@ -120,7 +120,7 @@ development view; user IDs do not provide authentication.
 ### Cursor pagination
 
 History starts with 20 tasks; **Load more tasks** appends the next page.
-`GET /api/runs?limit=20` returns `{ runs, nextCursor, endCursor }`.
+`GET /api/runs?limit=20` returns `{ runs, nextCursor, endCursor, changeCursor }`.
 Request the next page with `GET /api/runs?limit=20&cursor=<nextCursor>` and the
 same `X-User-Id` header. `nextCursor: null` means no older tasks remain, including
 when the last page is nonempty. Limits must be integers from 1 to 100; malformed
@@ -132,13 +132,31 @@ Migration 4 extends the owner/history index to `(user_id, created_at DESC, id DE
 New tasks above a cursor do not shift subsequent older pages. This is keyset
 pagination over live data, not a frozen database snapshot.
 
-The SSE history endpoint accepts `limit` and an optional `through=<endCursor>`.
-The client pins the oldest loaded row and expands that boundary after loading
-another page, so snapshots include new tasks and all loaded older tasks without
-replacing the list with just the latest page. Reconnect uses the same boundary.
-`endCursor` is the last returned row even when `nextCursor` is null. A selected
-task older than the first page can still be restored by an owner-scoped lookup.
-Loaded pages themselves are not persisted across a full browser reload.
+`endCursor` identifies the last returned row even when `nextCursor` is null.
+A selected task older than the first page can still be restored by an owner-scoped
+lookup. Loaded pages themselves are not persisted across a full browser reload.
+
+History updates are incremental: fetch the first REST page, then connect to
+`GET /api/runs/events?after=<changeCursor>`. `changeCursor` is a separate sequence
+watermark read in the same transaction as the page, closing the page/stream race.
+The SSE stream starts with `{ type: "ready", cursor }` and sends one changed task
+per `{ type: "run.updated", cursor, run }`. It never sends a task-list snapshot.
+The client resumes from the last processed change cursor after disconnection.
+Pagination cursors and change cursors are different and not interchangeable.
+
+Migration 5 creates `run_changes` and transactional INSERT/UPDATE triggers on
+`runs`. The journal has indexes for per-user replay and per-run revisions. Each
+summary carries a `revision` so stale REST/replayed data cannot overwrite a newer
+row even when timestamps tie. Replay reads at most 100 changes at a time and
+respects stream backpressure. Wake-ups drain this journal; every 15 seconds a
+small indexed reconciliation query covers missed wake-ups. Existing runs are not
+backfilled into the journal: their initial state comes from REST with revision 0.
+
+Only already loaded tasks and new tasks above the loaded boundary are inserted
+into the list. Updates to older unloaded tasks are ignored until their page is
+fetched. Updates received while loading a page are buffered until it is merged,
+so a stale page response cannot undo live changes. The journal currently has no
+retention policy; production needs retention and a cursor-expiry/resync protocol.
 
 ### SQLite storage
 
@@ -221,10 +239,11 @@ task after a full page refresh.
 After committing state, the worker sends `POST /api/internal/run-updates` with
 `{ userId, runId, stepId }` from the claimed step. The API checks that all three
 identifiers match a stored step, reads the committed state,
-and broadcasts snapshots to the matching user's SSE connections. Changed snapshots
-carry a `notification` object with those three identifiers. Submission
-also notifies history observers. Browser history and progress no longer poll.
-The JSON GET endpoints remain available for inspection.
+and wakes only the matching user's SSE connections. The history stream reads
+single-run changes from the durable journal; the selected-task progress stream
+reads that task's saved state. Selected-task snapshots include the notification
+triple. Submission also wakes history observers. Browser history and progress do
+not poll. JSON GET endpoints remain available for pagination and inspection.
 
 The worker defaults to `AGENT_API_URL=http://127.0.0.1:3000`. If Next.js uses a
 different port, start the worker with its actual URL, for example:
@@ -233,18 +252,17 @@ different port, start the worker with its actual URL, for example:
 AGENT_API_URL=http://127.0.0.1:3001 pnpm worker
 ```
 
-Every SSE connection starts with a current database snapshot. The client
-reconnects after one second if disconnected; it closes the selected-task stream
-on completion or failure. Switching users/tasks aborts the old streams without
-stopping execution. SSE is consumed through fetch so the identity header can be
-sent, rather than putting the ID in a URL.
+Selected-task SSE starts with the task's current snapshot and closes on completion
+or failure. History SSE replays single-task journal entries after the client's
+last cursor. Both reconnect after one second on disconnection. Switching users or
+tasks aborts old streams without stopping execution. SSE is consumed through
+fetch so the identity header can be sent rather than putting the ID in a URL.
 
-Notifications are best-effort wake-ups: a one-second notification timeout does
-not fail agent work. To cover a crash between commit and notification or an API
-outage, each connected SSE endpoint reconciles with SQLite every 15 seconds and
-sends a snapshot only when changed, plus keepalive comments. This is low-frequency
-server-side reconciliation, not repeated browser HTTP requests. The timeline is
-a state snapshot, not a guaranteed stream of every attempt/event.
+Notifications are best-effort wake-ups: a one-second timeout does not fail agent
+work. History reconciles the indexed journal tail every 15 seconds; selected-task
+progress reconciles its one task at that interval. Keepalive comments keep idle
+connections open. This never enumerates or resends the entire loaded history.
+The selected task timeline remains a state snapshot, not every historical attempt.
 
 The notification hub is local to a single API process. Multiple API replicas
 would need shared pub/sub; otherwise other replicas rely on reconciliation.

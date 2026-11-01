@@ -18,7 +18,7 @@ flowchart LR
     External["Fake external service"]
     ExternalDB[("fake-external.db: documents and unique operation keys")]
     Browser -->|"POST /api/runs"| API
-    API -->|"SSE: history and progress snapshots"| Browser
+    API -->|"SSE: one-run deltas and selected-task progress"| Browser
     Worker -->|"HTTP wake-up after commit"| API
     API --> DB
     Worker <-->|"claim, heartbeat, recovery"| DB
@@ -97,11 +97,21 @@ The selected task is saved separately per user. Reloading restores observation;
 changing tasks closes old SSE connections without cancelling execution.
 The worker sends best-effort HTTP notifications containing `userId`, `runId`,
 and `stepId` from its claimed step after state commits. The API validates the
-triple against stored ownership, reads SQLite, and pushes snapshots only to that
-user's SSE subscribers. Changed snapshots include the notification triple. History has its own
-stream; selected-task streams close at a terminal status. Reconnection sends a
-fresh snapshot. Keepalive/reconciliation every 15 seconds covers missed wake-ups
-without browser polling. A notification failure never fails agent execution.
+triple against stored ownership and wakes only that user's subscribers.
+History SSE sends one changed run per journal entry, not the loaded list. INSERT
+and UPDATE triggers append summaries to `run_changes` in the same transaction as
+task state. REST pages include a journal watermark captured with their rows;
+SSE starts after that watermark and resumes from the last processed cursor.
+A per-run revision prevents late REST/replayed rows overwriting newer state,
+including changes within one millisecond. Pagination races are handled by buffering
+deltas during page fetches and merging them after the REST response.
+
+Journal reads are indexed by `(user_id, seq)`, bounded to 100 entries, and driven
+by stream demand. Idle reconciliation checks only the journal tail every 15 seconds,
+so a lost wake-up does not require a full history read. Selected-task SSE still
+uses a snapshot of that one task and closes at a terminal status. Its reconnect
+returns current progress. Notification failure never fails agent execution.
+
 Connection errors are separate from persisted task failures and reads retry.
 The timeline is reconstructed from step state, not an immutable event log, so
 it shows the latest attempt timestamps rather than every historical attempt.
@@ -122,8 +132,8 @@ use it. The external document/reset panel remains a shared development tool.
 - Submission is not idempotent. If its response is lost, inspect history before
   submitting again; repeating POST can create a second task.
 - History uses a `(created_at, id)` keyset cursor and a matching owner index.
-  Its SSE snapshot covers the loaded range plus new tasks; a large loaded range
-  can still produce large snapshots. There is no retention policy. Step output carries cumulative
+  SSE sends a single changed summary independent of the loaded range. The change
+  journal currently has no retention policy or cursor-expiry protocol. Step output carries cumulative
   context and has no size limit or schema version. Inputs are assumed small.
 - The fake external service runs as an imported library, not over a network.
   Tests reproduce the independent-commit failure window but not network ambiguity.
@@ -142,7 +152,7 @@ use it. The external document/reset panel remains a shared development tool.
 Use authenticated principals for task access, define task and step schema
 versions, add submission idempotency, bounded retries and cancellation semantics,
 and implement reconciliation for tools without idempotency support. Introduce
-structured logs, attempt history, authenticated worker notifications, shared pub/sub, metrics, retention, and backups.
+structured logs, attempt history, authenticated worker notifications, shared pub/sub, metrics, journal retention with cursor-expiry/resync, and backups.
 
 For multiple hosts or higher write throughput, move claims and state to a shared
 transactional database or evaluate a durable workflow engine. A broker can wake

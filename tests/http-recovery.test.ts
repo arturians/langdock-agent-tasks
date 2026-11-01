@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { openDatabase } from "../lib/db.ts";
 import { readSnapshots } from "../lib/read-sse.ts";
 import type { RunProgress } from "../lib/run-progress.ts";
-import type { RunPage, RunSummary } from "../lib/types.ts";
+import type { RunHistoryEvent, RunPage } from "../lib/types.ts";
 import { createRun } from "../lib/run-store.ts";
 
 test("accepted work survives API restart and remains scoped to its user", { timeout: 30_000 }, async () => {
@@ -67,15 +67,19 @@ test("accepted work survives API restart and remains scoped to its user", { time
     };
     await launchApi();
     assert.equal((await fetch(`${base}/api/runs`)).status, 400);
-    const historyStream = readSnapshots<{ runs: RunSummary[] }>(await fetch(`${base}/api/runs/events`, {
+    const initialPage = await (await fetch(`${base}/api/runs`, { headers })).json() as RunPage;
+    const historyStream = readSnapshots<RunHistoryEvent>(await fetch(`${base}/api/runs/events?after=${initialPage.changeCursor}`, {
       headers, signal: AbortSignal.any([streams.signal, AbortSignal.timeout(5000)]),
     }));
-    assert.deepEqual((await historyStream.next()).value?.runs, []);
+    assert.equal((await historyStream.next()).value?.type, "ready");
     const submitted = await fetch(`${base}/api/runs`, { method: "POST", headers, body: JSON.stringify({ prompt: "Survive API restart" }) });
     assert.equal(submitted.status, 202);
     const { runId } = await submitted.json();
     const firstStepId = db.prepare("SELECT id FROM run_steps WHERE run_id = ?").get(runId)!.id as string;
-    assert.equal((await historyStream.next()).value?.runs[0].id, runId);
+    const created = (await historyStream.next()).value!;
+    assert.ok(created.type === "run.updated");
+    assert.equal(created.run.id, runId);
+    assert.equal("runs" in created, false);
     assert.equal(db.prepare("SELECT status FROM runs WHERE id = ?").get(runId)?.status, "queued");
     const progressStream = readSnapshots<RunProgress>(await fetch(`${base}/api/runs/${runId}/events`, {
       headers, signal: AbortSignal.any([streams.signal, AbortSignal.timeout(5000)]),
@@ -136,11 +140,15 @@ test("accepted work survives API restart and remains scoped to its user", { time
     for (const query of ["limit=0", "limit=101", "cursor=bad"]) {
       assert.equal((await fetch(`${base}/api/runs?${query}`, { headers })).status, 400);
     }
-    const liveWindow = readSnapshots<RunPage>(await fetch(`${base}/api/runs/events?limit=1&through=${nextPage.endCursor}`, {
+    const replay = readSnapshots<RunHistoryEvent>(await fetch(`${base}/api/runs/events?after=0`, {
       headers, signal: AbortSignal.timeout(5000),
     }));
-    assert.equal((await liveWindow.next()).value?.runs.length, 2);
-    await liveWindow.return(undefined);
+    assert.equal((await replay.next()).value?.type, "ready");
+    const replayed = (await replay.next()).value!;
+    assert.ok(replayed.type === "run.updated");
+    assert.equal(replayed.run.id, runId);
+    assert.equal("runs" in replayed, false);
+    await replay.return(undefined);
   } finally {
     streams.abort();
     await stop(api);

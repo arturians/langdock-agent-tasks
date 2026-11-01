@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "./db.ts";
-import { createRun, listUserRuns, readUserRunWindow } from "./run-store.ts";
+import { createRun, listUserRuns } from "./run-store.ts";
 import { decodeRunCursor, encodeRunCursor, parseRunPagination } from "./run-pagination.ts";
 import { mergeRunPages } from "./merge-run-pages.ts";
 
@@ -24,27 +24,8 @@ test("keyset pages have no gaps or duplicates with tied timestamps and new inser
     assert.equal(seen.includes(newest), false);
     assert.equal(listUserRuns(db, "a").runs[0].id, newest);
     assert.equal(listUserRuns(db, "other").runs.length, 1);
-    assert.deepEqual(listUserRuns(db, "missing"), { runs: [], nextCursor: null, endCursor: null });
+    assert.deepEqual(listUserRuns(db, "missing"), { runs: [], nextCursor: null, endCursor: null, changeCursor: "0" });
     assert.deepEqual(db.prepare("PRAGMA index_info(runs_user_created)").all().map(column => column.name), ["user_id", "created_at", "id"]);
-  } finally { db.close(); }
-});
-
-test("live window retains loaded pages, reflects older updates and includes new tasks", () => {
-  const db = openDatabase(":memory:");
-  try {
-    for (let i = 0; i < 8; i++) createRun(db, { userId: "a", prompt: `Task ${i}`, firstStep: { type: "first", input: null } });
-    db.exec("UPDATE runs SET created_at = 1000");
-    const first = listUserRuns(db, "a", { limit: 2 });
-    const second = listUserRuns(db, "a", { limit: 2, cursor: decodeRunCursor(first.nextCursor!) });
-    const newest = createRun(db, { userId: "a", prompt: "New", firstStep: { type: "first", input: null } });
-    db.prepare("UPDATE runs SET status = 'failed', updated_at = 2000 WHERE id = ?").run(second.runs[1].id);
-    const window = readUserRunWindow(db, "a", 2, decodeRunCursor(second.endCursor!));
-    assert.equal(window.runs.length, 5);
-    assert.equal(window.runs[0].id, newest);
-    assert.equal(window.runs.at(-1)?.status, "failed");
-    assert.equal(window.endCursor, second.endCursor);
-    assert.equal(window.nextCursor, second.nextCursor);
-    assert.equal(listUserRuns(db, "a", { limit: 100 }).nextCursor, null);
   } finally { db.close(); }
 });
 
@@ -60,9 +41,9 @@ test("pagination validates limits and malformed cursors", () => {
 });
 
 test("appending pages deduplicates rows and preserves fresher SSE state", () => {
-  const run = { id: "a", prompt: "A", status: "running" as const, created_at: 100, updated_at: 20 };
-  const current = { runs: [run], nextCursor: "first", endCursor: "first" };
-  const older = { runs: [{ ...run, status: "queued" as const, updated_at: 1 }, { ...run, id: "b", created_at: 50 }], nextCursor: null, endCursor: "last" };
+  const run = { id: "a", prompt: "A", status: "running" as const, created_at: 100, updated_at: 20, revision: 20 };
+  const current = { runs: [run], nextCursor: "first", endCursor: "first", changeCursor: "20" };
+  const older = { runs: [{ ...run, status: "queued" as const, updated_at: 1, revision: 1 }, { ...run, id: "b", created_at: 50 }], nextCursor: null, endCursor: "last", changeCursor: "30" };
   const merged = mergeRunPages(current, older);
   assert.equal(merged.runs.length, 2);
   assert.equal(merged.runs[0].status, "running");

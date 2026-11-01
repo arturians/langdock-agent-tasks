@@ -37,5 +37,9 @@ user approval.
     per-step claims/heartbeats/fencing, and validated userId/runId/stepId SSE updates.
 
 11. Add cursor pagination to task history without losing live SSE updates.
-    Reviewed and approved for commit. created_at/id keyset, bounded pages,
+    Committed: `7e8fa85`. created_at/id keyset, bounded pages,
     load-more UI, matching index, and live snapshots across the loaded range.
+
+12. Replace full history SSE snapshots with durable single-run deltas.
+    Reviewed and approved for commit. Transactional journal, per-user replay,
+    page watermark, row revisions, bounded reads, and load-more race handling.
