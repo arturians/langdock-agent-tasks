@@ -96,14 +96,15 @@ Run requests include `X-User-Id`; the API rejects missing or invalid UUIDs and
 registers valid identities in SQLite. This is a prototype identity mechanism,
 not authentication: anyone who knows an ID can use it.
 
-Task persistence and history endpoints are not connected yet. The storage layer
-provides `findUserRun()` for owner-scoped reads; the fake external documents
-panel is still a shared development view.
+Run requests now persist tasks under the supplied user ID. History endpoints
+and the history UI are not connected yet. The storage layer provides
+`findUserRun()` for owner-scoped reads; the fake external documents panel is
+still a shared development view.
 
 ### SQLite storage
 
-The SQLite storage layer uses the built-in `node:sqlite` module. It is not yet
-connected to the agent or API: the starter still executes runs through an HTTP stream.
+The SQLite storage layer uses the built-in `node:sqlite` module. The API creates
+a run and its first step before starting the agent through the HTTP stream.
 
 `openDatabase()` in `lib/db.ts` creates `.runtime/agent.db` and applies versioned
 migrations automatically. Connections enable foreign keys, WAL journaling,
@@ -112,8 +113,30 @@ Timestamps are Unix milliseconds.
 
 The schema contains `users`, `runs`, and `run_steps`. `createRun()` in
 `lib/run-store.ts` atomically creates the user if needed, a queued run, and only
-its first step. Future steps will be generated during execution, rather than
-inserted as a predefined plan. Step input and output are JSON values.
+its first step. Each step handler returns JSON output and either a next step
+with its input or a final result. `completeStep()` saves the output and creates
+the continuation (or completes the run) in one transaction. The executor reads
+the next unfinished step from storage; completed steps are skipped. The sample
+handlers still follow the original five-step scenario, but the executor has no
+predefined list or total step count.
+
+Step processor classes live in `lib/agent/steps/` and implement `StepProcessor`.
+`lib/agent/processors.ts` explicitly registers them in `StepRegistry`, which
+rejects duplicate and unknown types. The executor selects processors by the
+stored step type and has no action-specific branching. Each processor owns its
+title, input validation, output, and continuation; the registry order does not
+determine execution order. Tests can inject a different registry into `runAgent()`.
+Processors return `output` and `nextProcessor` (a class name such as
+`SearchInformationProcessor.name`, or `null` to finish). Output becomes the next
+processor's input. A final processor also returns the user-facing `result`.
+Class names are persisted as step types: renaming them requires a migration.
+Migration 2 maps the original step identifiers to processor class names.
+
+Execution is still attached to the HTTP request in this intermediate version.
+A request abort marks the run failed; a process crash leaves the last committed
+state on disk. Automatic recovery, worker leases, and idempotent external calls
+will be added in subsequent steps. Steps interrupted before committing may run
+again; external document creation is not yet safe to retry.
 
 Run storage tests and static checks with:
 

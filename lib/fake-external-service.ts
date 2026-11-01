@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ExternalAction } from "@/lib/types";
+import type { ExternalAction } from "./types.ts";
 
 const runtimeDirectory = path.join(process.cwd(), ".runtime");
 const actionsFile = path.join(runtimeDirectory, "fake-external-actions.json");

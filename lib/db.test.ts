@@ -5,6 +5,26 @@ import path from "node:path";
 import { test } from "node:test";
 import { openDatabase } from "./db.ts";
 import { createRun } from "./run-store.ts";
+import { migrate } from "./migrations.ts";
+
+test("migration preserves stored steps while converting legacy types to class names", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const runId = createRun(db, {
+      userId: "a", prompt: "Test", firstStep: { type: "understand_request", input: { prompt: "Test" } },
+    });
+    db.exec("PRAGMA user_version = 1");
+    migrate(db);
+    const step = db.prepare("SELECT * FROM run_steps WHERE run_id = ?").get(runId)!;
+    assert.equal(step.type, "UnderstandRequestProcessor");
+    assert.equal(step.input_json, '{"prompt":"Test"}');
+    assert.equal(step.status, "pending");
+    migrate(db);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM run_steps").get()?.n, 1);
+  } finally {
+    db.close();
+  }
+});
 
 test("a run and only its first step survive reopening and migrations", () => {
   const directory = mkdtempSync(path.join(tmpdir(), "agent-db-"));

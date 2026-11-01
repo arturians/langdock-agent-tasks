@@ -45,6 +45,16 @@ const migrations = [
     CREATE INDEX runs_user_created ON runs(user_id, created_at DESC);
     CREATE INDEX runs_queue ON runs(status, lease_expires_at, created_at);
   `,
+  `
+    UPDATE run_steps SET type = CASE type
+      WHEN 'understand_request' THEN 'UnderstandRequestProcessor'
+      WHEN 'search_information' THEN 'SearchInformationProcessor'
+      WHEN 'prepare_recommendation' THEN 'PrepareRecommendationProcessor'
+      WHEN 'create_document' THEN 'CreateDocumentProcessor'
+      WHEN 'produce_response' THEN 'ProduceResponseProcessor'
+      ELSE type
+    END;
+  `,
 ];
 
 /** Version and schema changes commit together; concurrent openers serialize here. */

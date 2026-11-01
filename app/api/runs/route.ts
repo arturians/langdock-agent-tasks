@@ -1,8 +1,8 @@
-import { runAgent } from "@/lib/agent";
+import { firstStep, runAgent } from "@/lib/agent";
 import type { AgentEvent } from "@/lib/types";
 import { requestUserId } from "@/lib/user-id";
 import { openDatabase } from "@/lib/db";
-import { ensureUser } from "@/lib/run-store";
+import { createRun } from "@/lib/run-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,18 +24,21 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const db = openDatabase();
+  let runId: string;
   try {
-    ensureUser(db, userId);
-  } finally {
+    runId = createRun(db, { userId, prompt, firstStep: firstStep(prompt) });
+  } catch (error) {
     db.close();
+    throw error;
   }
-
-  const runId = crypto.randomUUID();
+  let connected = true;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const emit = (event: AgentEvent) => controller.enqueue(serialize(event));
+      const emit = (event: AgentEvent) => {
+        if (connected && !request.signal.aborted) controller.enqueue(serialize(event));
+      };
 
-      void runAgent({ runId, prompt, signal: request.signal, emit })
+      void runAgent({ db, runId, prompt, signal: request.signal, emit })
         .catch((error: unknown) => {
           if (!request.signal.aborted) {
             emit({
@@ -46,7 +49,13 @@ export async function POST(request: Request): Promise<Response> {
             });
           }
         })
-        .finally(() => controller.close());
+        .finally(() => {
+          db.close();
+          if (connected) controller.close();
+        });
+    },
+    cancel() {
+      connected = false;
     },
   });
 
