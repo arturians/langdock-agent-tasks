@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import type { RunSummary } from "./types.ts";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -139,6 +140,11 @@ export function ensureUser(db: DatabaseSync, userId: string, now = Date.now()): 
 /** All future task reads must be scoped by both run ID and user ID. */
 export function findUserRun(db: DatabaseSync, userId: string, runId: string) {
   return db.prepare("SELECT * FROM runs WHERE id = ? AND user_id = ?").get(runId, userId);
+}
+
+export function listUserRuns(db: DatabaseSync, userId: string): RunSummary[] {
+  return db.prepare(`SELECT id, prompt, status, created_at, updated_at FROM runs
+    WHERE user_id = ? ORDER BY created_at DESC, id DESC`).all(userId) as RunSummary[];
 }
 
 /** Persist acceptance and only the first step; later steps are produced at runtime. */

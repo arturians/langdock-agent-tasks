@@ -43,6 +43,13 @@ h1 { font-size: clamp(28px, 5vw, 36px); font-weight: 520; letter-spacing: -.035e
 .identity-actions button { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12px; padding: 7px 10px; }
 .user-identity p { color: var(--muted); font-size: 11px; line-height: 1.5; }
 
+.task-history { border-top: 1px solid var(--border); margin-top: 32px; padding-top: 20px; }
+.task-list { display: grid; gap: 8px; max-height: 320px; overflow-y: auto; }
+.task-list button { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); padding: 12px; text-align: left; }
+.task-list button[aria-pressed="true"] { border-color: var(--blue); }
+.task-list strong { display: block; font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.task-list span { color: var(--secondary); display: block; font-size: 11px; margin-top: 6px; }
+
 .activity, .external-system { border-top: 1px solid var(--border); margin-top: 52px; padding-top: 20px; }
 .external-system { margin-top: 38px; }
 .section-heading { align-items: flex-start; display: flex; justify-content: space-between; margin-bottom: 15px; }

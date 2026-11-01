@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { stepRegistry } from "./agent/processors.ts";
-import type { AgentEvent } from "./types.ts";
+import type { AgentEvent, RunStatus } from "./types.ts";
 
-export type RunProgress = { status: string; events: AgentEvent[] };
+export type RunProgress = { status: RunStatus; events: AgentEvent[] };
 
 /** A read transaction gives the observer a consistent snapshot of run and steps. */
 export function readUserProgress(db: DatabaseSync, userId: string, runId: string): RunProgress | null {
@@ -20,7 +20,7 @@ export function readUserProgress(db: DatabaseSync, userId: string, runId: string
     }
     if (run.status === "completed") events.push({ type: "run.completed", runId, result: run.result as string, occurredAt: at(run.finished_at) });
     if (run.status === "failed") events.push({ type: "run.failed", runId, error: run.error as string, occurredAt: at(run.finished_at) });
-    return { status: run.status as string, events };
+    return { status: run.status as RunStatus, events };
   } finally {
     db.exec("COMMIT");
   }

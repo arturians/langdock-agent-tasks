@@ -76,7 +76,7 @@ export function UserIdentity({ disabled, onChange }: {
         <button type="button" disabled={disabled} onClick={() => selectIdentity(crypto.randomUUID())}>New ID</button>
       </div>
       <p>Anyone with this ID can access its tasks. A new ID keeps previous tasks under the old ID. Save it to return later.</p>
-      {disabled && <p>Wait for the current run to finish before switching identity.</p>}
+      {disabled && <p>Wait for task submission before switching identity.</p>}
       <p role="status">{message}</p>
     </section>
   );

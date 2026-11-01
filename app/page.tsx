@@ -1,9 +1,8 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import type { RunProgress } from "@/lib/run-progress";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { AgentEvent, ExternalAction } from "@/lib/types";
-import { USER_ID_HEADER } from "@/lib/user-id";
+import { useRuns } from "./use-runs";
 import { UserIdentity } from "./user-identity";
 
 const defaultPrompt = "Research the most important considerations for adopting an enterprise AI assistant.";
@@ -26,93 +25,38 @@ function eventLabel(event: AgentEvent): string {
 export default function Home() {
   const [userId, setUserId] = useState("");
   const [prompt, setPrompt] = useState(defaultPrompt);
-  const [events, setEvents] = useState<AgentEvent[]>([]);
   const [documents, setDocuments] = useState<ExternalAction[]>([]);
-  const [running, setRunning] = useState(false);
-  const [runStatus, setRunStatus] = useState("Ready");
-  const [requestError, setRequestError] = useState<string | null>(null);
-  const abortController = useRef<AbortController | null>(null);
+  const [documentError, setDocumentError] = useState<string | null>(null);
+  const [debugMessage, setDebugMessage] = useState<string | null>(null);
+  const tasks = useRuns(userId);
+  const events = tasks.progress?.events ?? [];
+  const running = tasks.progress?.status === "running" || tasks.progress?.status === "queued";
 
   const changeUser = useCallback((id: string) => {
     setUserId(id);
-    setEvents([]);
-    setRunStatus("Ready");
-    setRequestError(null);
+    setDebugMessage(null);
   }, []);
 
   const loadDocuments = useCallback(async () => {
-    const response = await fetch("/api/fake-tools/documents", { cache: "no-store" });
-    if (response.ok) {
+    try {
+      const response = await fetch("/api/fake-tools/documents", { cache: "no-store" });
+      if (!response.ok) throw new Error("Cannot load external documents.");
       const body = (await response.json()) as { documents: ExternalAction[] };
       setDocuments(body.documents);
+      setDocumentError(null);
+    } catch {
+      setDocumentError("External documents are unavailable.");
     }
   }, []);
 
   useEffect(() => {
-    const loadInitialDocuments = async () => {
-      await loadDocuments();
-    };
-
-    void loadInitialDocuments();
-    return () => abortController.current?.abort();
-  }, [loadDocuments]);
+    const refresh = async () => { await loadDocuments(); };
+    void refresh();
+  }, [loadDocuments, tasks.selectedId, tasks.progress?.status]);
 
   async function startRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!prompt.trim() || running || !userId) return;
-
-    const controller = new AbortController();
-    abortController.current = controller;
-    setEvents([]);
-    setRequestError(null);
-    setRunning(true);
-    setRunStatus("Submitting");
-
-    try {
-      const response = await fetch("/api/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", [USER_ID_HEADER]: userId },
-        body: JSON.stringify({ prompt }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) throw new Error(`The run request failed with status ${response.status}.`);
-      const { runId } = await response.json() as { runId: string };
-      setRunStatus("Queued");
-      while (!controller.signal.aborted) {
-        try {
-          const progressResponse = await fetch(`/api/runs/${runId}`, {
-            headers: { [USER_ID_HEADER]: userId }, cache: "no-store", signal: controller.signal,
-          });
-          if (progressResponse.status === 404 || progressResponse.status === 400) {
-            throw new Error("The run is unavailable for this user ID.");
-          }
-          if (!progressResponse.ok) {
-            setRequestError("Cannot load progress. Retrying; the task may still be running.");
-          } else {
-            const progress = await progressResponse.json() as RunProgress;
-            setEvents(progress.events);
-            setRunStatus(progress.status[0].toUpperCase() + progress.status.slice(1));
-            setRequestError(null);
-            if (progress.status === "completed" || progress.status === "failed") break;
-          }
-        } catch (error) {
-          if (controller.signal.aborted) break;
-          if (error instanceof Error && error.message === "The run is unavailable for this user ID.") throw error;
-          setRequestError("Connection lost. Retrying; the task may still be running.");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 750));
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setRequestError(error instanceof Error ? error.message : "The run was interrupted.");
-        setRunStatus((current) => current === "Submitting" ? "Request failed" : current);
-      }
-    } finally {
-      setRunning(false);
-      abortController.current = null;
-      void loadDocuments();
-    }
+    if (prompt.trim()) await tasks.submit(prompt.trim());
   }
 
   async function resetDocuments() {
@@ -121,7 +65,7 @@ export default function Home() {
   }
 
   async function terminateBackend() {
-    setRequestError("API termination requested. The worker continues. Restart the API with pnpm dev.");
+    setDebugMessage("API termination requested. The worker continues. Restart the API with pnpm dev.");
     try {
       await fetch("/api/debug/crash", { method: "POST" });
     } catch {
@@ -129,9 +73,9 @@ export default function Home() {
     }
   }
 
-  const runId = events[0]?.runId;
+  const runId = tasks.selectedId;
   const completed = events.find((event) => event.type === "run.completed");
-  const statusLabel = runStatus;
+  const statusLabel = tasks.progress?.status ?? (runId ? "Loading" : "Ready");
 
   return (
     <main className="app-shell">
@@ -143,15 +87,31 @@ export default function Home() {
           <textarea id="prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Give the agent a task…" rows={3} />
           <div className="composer-footer">
             <span>5 simulated steps · about 15 seconds</span>
-            <button aria-label="Start agent run" disabled={running || !prompt.trim() || !userId} type="submit">
-              {running ? <span className="spinner" /> : <span aria-hidden="true">↑</span>}
+            <button aria-label="Start agent run" disabled={tasks.submitting || !prompt.trim() || !userId} type="submit">
+              {tasks.submitting ? <span className="spinner" /> : <span aria-hidden="true">↑</span>}
             </button>
           </div>
         </form>
         <p className="connection-note">Tasks run in a separate worker. Closing this page does not stop execution.</p>
       </section>
 
-      <UserIdentity disabled={running} onChange={changeUser} />
+      <UserIdentity disabled={tasks.submitting} onChange={changeUser} />
+
+      <section className="task-history" aria-label="Your tasks">
+        <div className="section-heading"><span className="section-label">Your tasks</span></div>
+        {tasks.loading && <p className="quiet-state">Loading task history…</p>}
+        {!tasks.loading && tasks.runs.length === 0 && <p className="quiet-state">No tasks for this user ID.</p>}
+        {tasks.historyError && <p className="error-message">{tasks.historyError}</p>}
+        {tasks.submissionError && <p className="error-message">{tasks.submissionError}</p>}
+        <div className="task-list">
+          {tasks.runs.map((run) => (
+            <button type="button" key={run.id} aria-pressed={run.id === runId} disabled={tasks.submitting} onClick={() => tasks.selectRun(run.id)}>
+              <strong>{run.prompt}</strong>
+              <span>{run.status} · {new Date(run.created_at).toLocaleString()}</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section className="activity" aria-live="polite">
         <div className="section-heading">
@@ -174,7 +134,8 @@ export default function Home() {
             ))}
           </div>
         )}
-        {requestError && <p className="error-message">{requestError}</p>}
+        {tasks.progressError && <p className="error-message">{tasks.progressError}</p>}
+        {debugMessage && <p className="error-message">{debugMessage}</p>}
         {completed?.type === "run.completed" && <div className="result">{completed.result}</div>}
       </section>
 
@@ -183,6 +144,7 @@ export default function Home() {
           <div><span className="section-label">Fake external system</span><p>Documents created by simulated tool calls appear here.</p></div>
           {documents.length > 0 && <button className="text-button" onClick={resetDocuments} type="button">Reset</button>}
         </div>
+        {documentError && <p className="error-message">{documentError}</p>}
         {documents.length === 0 ? <div className="quiet-state">No documents created.</div> : (
           <div className="document-list">
             {documents.slice().reverse().map((document) => (

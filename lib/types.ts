@@ -1,3 +1,13 @@
+export type RunStatus = "queued" | "running" | "completed" | "failed";
+
+export type RunSummary = {
+  id: string;
+  prompt: string;
+  status: RunStatus;
+  created_at: number;
+  updated_at: number;
+};
+
 export type AgentEvent =
   | {
       type: "run.started";

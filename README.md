@@ -95,17 +95,26 @@ Open [http://localhost:3000](http://localhost:3000). A normal run takes approxim
 The page generates a UUID and stores it in local storage as `agent-user-id`.
 The User ID controls let you copy it, use a manually entered UUID, or generate
 a new one. Switching IDs clears the current run display; it does not delete
-stored tasks. Switching is disabled while a run is active. Changes in another
+stored tasks. Switching is disabled only while submitting a task. Changes in another
 tab reload the page to keep the identity consistent.
 
 Run requests include `X-User-Id`; the API rejects missing or invalid UUIDs and
 registers valid identities in SQLite. This is a prototype identity mechanism,
 not authentication: anyone who knows an ID can use it.
 
-Run requests now persist tasks under the supplied user ID. History endpoints
-and the history UI are not connected yet. The storage layer provides
-`findUserRun()` for owner-scoped reads; the fake external documents panel is
-still a shared development view.
+`GET /api/runs` lists only the current user's tasks, newest first. The page
+refreshes history every 1.5 seconds and the selected active task every 750 ms.
+Select any task to inspect its progress, saved result, or failure. New tasks can
+be submitted while other tasks are executing; the worker processes its queue.
+
+The selected task ID is stored separately for each user as
+`agent-selected-run:<userId>`. Reloading or reopening the page restores that task
+and resumes observation. If the saved task is unavailable, the latest owned task
+is selected. Switching user IDs cancels observation requests and displays that
+user's history without stopping execution. Switching back restores the selection.
+Temporary connection errors are displayed separately from task failure and reads
+retry automatically. The fake external documents panel is still a shared
+development view; user IDs do not provide authentication.
 
 ### SQLite storage
 
@@ -159,9 +168,8 @@ errors mark a task failed; automatic retries of application errors are not added
 
 Both processes must use the same working directory and persistent local disk.
 `AGENT_DB_PATH` can override the database file for both processes. Closing the
-browser or stopping Next.js does not stop the worker. The current page can retry
-progress reads after a temporary API outage, but selecting tasks after a full
-page refresh is deferred to the task-history stage. External document creation
+browser or stopping Next.js does not stop the worker. The page retries reads after a temporary API outage and restores the selected
+task after a full page refresh. External document creation
 is not yet safe to retry, and concurrent external JSON writes remain a limitation.
 
 Run storage tests and static checks with:

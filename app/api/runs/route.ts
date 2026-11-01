@@ -1,10 +1,21 @@
 import { firstStep } from "@/lib/agent";
 import { requestUserId } from "@/lib/user-id";
 import { openDatabase } from "@/lib/db";
-import { createRun } from "@/lib/run-store";
+import { createRun, listUserRuns } from "@/lib/run-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+export async function GET(request: Request): Promise<Response> {
+  const userId = requestUserId(request);
+  if (!userId) return Response.json({ error: "A valid UUID in X-User-Id is required." }, { status: 400 });
+  const db = openDatabase();
+  try {
+    return Response.json({ runs: listUserRuns(db, userId) });
+  } finally {
+    db.close();
+  }
+}
 
 export async function POST(request: Request): Promise<Response> {
   const userId = requestUserId(request);
