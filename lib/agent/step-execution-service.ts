@@ -31,7 +31,7 @@ export class StepExecutionService {
     emit({ type: "step.started", runId, step: step.step_number, title, occurredAt: new Date().toISOString() });
     await delay(this.stepDelay, undefined, { signal });
     const outcome = await processor.execute({
-      runId, stepId: step.id, input: JSON.parse(step.input_json), signal,
+      runId, stepId: step.id, idempotencyKey: step.idempotency_key, input: JSON.parse(step.input_json), signal,
     });
     if (outcome.nextProcessor !== null) this.registry.get(outcome.nextProcessor);
     completeStep(this.db, step, outcome.nextProcessor === null

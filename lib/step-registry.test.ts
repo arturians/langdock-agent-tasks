@@ -26,7 +26,7 @@ test("registered processors pass their output to the next action", async () => {
   let input = { prompt: "Test" };
   for (const expectedNext of ["SearchInformationProcessor", "PrepareRecommendationProcessor", "CreateDocumentProcessor"]) {
     const outcome = await stepRegistry.get(type).execute({
-      runId: "run", stepId: "step", input, signal: new AbortController().signal,
+      runId: "run", stepId: "step", idempotencyKey: "step", input, signal: new AbortController().signal,
     });
     assert.equal(outcome.nextProcessor, expectedNext);
     input = outcome.output as { prompt: string };
@@ -34,7 +34,7 @@ test("registered processors pass their output to the next action", async () => {
   }
   assert.ok("recommendation" in input);
   await assert.rejects(() => stepRegistry.get("UnderstandRequestProcessor").execute({
-    runId: "run", stepId: "step", input: null, signal: new AbortController().signal,
+    runId: "run", stepId: "step", idempotencyKey: "step", input: null, signal: new AbortController().signal,
   }), /must contain a prompt/);
 });
 

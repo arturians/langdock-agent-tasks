@@ -12,6 +12,7 @@ export type StoredStep = {
   step_number: number;
   type: string;
   input_json: string;
+  idempotency_key: string;
   status: "pending" | "running" | "completed" | "failed";
 };
 

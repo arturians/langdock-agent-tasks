@@ -3,6 +3,7 @@ import type { JsonValue } from "../run-store.ts";
 export type StepContext = {
   runId: string;
   stepId: string;
+  idempotencyKey: string;
   input: JsonValue;
   signal: AbortSignal;
 };

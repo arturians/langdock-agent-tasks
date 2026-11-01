@@ -5,12 +5,13 @@ import type { StepContext, StepProcessor, ProcessorResult } from "../step-proces
 
 export class CreateDocumentProcessor implements StepProcessor {
   readonly title = "Create a document in an external system";
-  async execute({ runId, input, signal }: StepContext): Promise<ProcessorResult> {
+  async execute({ runId, idempotencyKey, input, signal }: StepContext): Promise<ProcessorResult> {
     signal.throwIfAborted();
     const data = readPromptInput(input);
     if (typeof data.recommendation !== "string") throw new Error("Missing recommendation.");
     const document = await createDocument({
       runId,
+      idempotencyKey,
       title: `Agent result: ${data.prompt.slice(0, 48)}`,
       content: data.recommendation,
     });

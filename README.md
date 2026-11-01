@@ -169,8 +169,29 @@ errors mark a task failed; automatic retries of application errors are not added
 Both processes must use the same working directory and persistent local disk.
 `AGENT_DB_PATH` can override the database file for both processes. Closing the
 browser or stopping Next.js does not stop the worker. The page retries reads after a temporary API outage and restores the selected
-task after a full page refresh. External document creation
-is not yet safe to retry, and concurrent external JSON writes remain a limitation.
+task after a full page refresh.
+
+### Idempotent external documents
+
+The fake external system uses a separate `.runtime/fake-external.db` SQLite file
+(override with `FAKE_EXTERNAL_DB_PATH` for both processes). It uses the default
+rollback journal, `synchronous=FULL`, and a five-second lock wait. Its transaction
+is independent of the agent database, preserving the external-call crash window.
+
+The executor passes the stored step's `idempotency_key` to its processor.
+Document creation checks that unique key and inserts within one transaction.
+Retries with identical input return the original document, including its ID and
+creation time. Reusing a key with different input fails. Concurrent processes
+using the same key produce one document. After a crash following external commit
+but preceding step commit, recovery repeats the call with the same key and saves
+the existing document's ID.
+
+On first initialization, documents from the neighboring
+`fake-external-actions.json` are imported once; the JSON remains as a backup.
+Legacy documents have no idempotency key, so this guarantee applies to calls
+made by the new implementation, not old calls interrupted before this upgrade.
+The development **Reset** action deletes documents and their keys; replaying an
+unfinished task after reset can create a new document. Use reset after runs finish.
 
 Run storage tests and static checks with:
 

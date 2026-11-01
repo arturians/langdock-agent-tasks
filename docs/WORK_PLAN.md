@@ -22,6 +22,7 @@ user approval.
    Committed: `afaa15c`. Includes minimal owner-scoped progress
    polling so the current UI works with asynchronous submission.
 6. User task history and progress restoration in the UI.
-   Reviewed and approved for commit.
+   Committed: `7df58c7`.
 7. Idempotent external document creation.
+   Implemented, awaiting review and commit.
 8. Recovery scenario tests and final README / DESIGN documentation.
